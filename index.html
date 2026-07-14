@@ -1,0 +1,912 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#0b0f14" />
+<link rel="manifest" href="./manifest.webmanifest" />
+<link rel="icon" href="./icon.svg" />
+<link rel="apple-touch-icon" href="./icon.svg" />
+<meta name="mobile-web-app-capable" content="yes" />
+<title>Coach — Training OS</title>
+<style>
+  :root{
+    --bg:#0b0f14; --panel:#121924; --panel-2:#0f1620; --line:#1e2a3a;
+    --ink:#e8eef6; --muted:#8ea0b5; --dim:#5f7189;
+    --accent:#4cc2ff; --accent-2:#7c5cff; --good:#39d98a; --warn:#ffb020; --bad:#ff5d5d;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);-webkit-font-smoothing:antialiased}
+  body{padding-bottom:86px}
+  body.setup{padding-bottom:20px}
+  body.setup nav.tabs{display:none}
+  .wrap{max-width:720px;margin:0 auto;padding:14px 14px 20px}
+  header.app{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:14px 14px 6px;max-width:720px;margin:0 auto}
+  header.app h1{font-size:15px;margin:0;font-weight:650}
+  .brandmark{width:26px;height:26px;border-radius:8px;background:linear-gradient(135deg,var(--accent),var(--accent-2));display:grid;place-items:center;color:#03121c;font-weight:800;font-size:13px}
+  .sub{color:var(--dim);font-size:11px;font-family:var(--mono)}
+  .row{display:flex;gap:10px} .col{display:flex;flex-direction:column;gap:10px}
+  .grid{display:grid;gap:10px} .g2{grid-template-columns:1fr 1fr} .g3{grid-template-columns:1fr 1fr 1fr}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px}
+  .card h3{margin:0 0 10px;font-size:11px;text-transform:uppercase;letter-spacing:.12em;color:var(--muted);font-weight:650}
+  .muted{color:var(--muted)} .dim{color:var(--dim)} .mono{font-family:var(--mono)}
+  .pill{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:999px;font-size:11px;font-weight:600;border:1px solid var(--line);background:var(--panel-2)}
+  .pill.good{color:var(--good);border-color:#1c3b2c;background:#0e1c15}
+  .pill.warn{color:var(--warn);border-color:#3b2f14;background:#1c160a}
+  .pill.bad{color:var(--bad);border-color:#3b1c1c;background:#1c0d0d}
+  button{font-family:inherit;cursor:pointer;border:1px solid var(--line);background:var(--panel-2);color:var(--ink);border-radius:10px;padding:11px 14px;font-size:14px;font-weight:600}
+  button.primary{background:linear-gradient(135deg,var(--accent),var(--accent-2));color:#03121c;border:none}
+  button.ghost{background:transparent}
+  button.sm{padding:7px 10px;font-size:12px}
+  button:active{transform:translateY(1px)}
+  button:disabled{opacity:.45}
+  input,select,textarea{font-family:inherit;background:var(--panel-2);border:1px solid var(--line);color:var(--ink);border-radius:10px;padding:11px;font-size:16px;width:100%}
+  textarea{resize:vertical;min-height:70px;font-size:14px}
+  label.f{display:block;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin:0 0 5px}
+  .seg{display:flex;gap:6px}
+  .seg button{flex:1;padding:10px 0;font-variant-numeric:tabular-nums}
+  .seg button.on{background:linear-gradient(135deg,var(--accent),var(--accent-2));color:#03121c;border:none}
+  .goal{background:var(--panel-2);border:1px solid var(--line);border-radius:12px;padding:12px}
+  .goal .top{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+  .goal .nm{font-weight:700;font-size:14px}
+  .goal .val{font-variant-numeric:tabular-nums;font-size:13px;color:var(--muted)}
+  .bar{height:7px;background:#0a1420;border:1px solid var(--line);border-radius:99px;margin-top:9px;overflow:hidden}
+  .bar > i{display:block;height:100%;background:linear-gradient(90deg,var(--accent),var(--accent-2));border-radius:99px}
+  .bar.gate > i{background:linear-gradient(90deg,var(--warn),var(--good))}
+  .setrow{display:grid;grid-template-columns:24px 1fr 1fr 1fr;gap:7px;align-items:center;padding:7px;border:1px solid var(--line);border-radius:10px;background:var(--panel-2);margin-bottom:7px}
+  .setrow .idx{width:24px;height:24px;border-radius:7px;background:#0a1620;border:1px solid var(--line);display:grid;place-items:center;font-size:11px;color:var(--muted)}
+  .setrow small{display:block;font-size:9px;color:var(--dim);text-transform:uppercase;margin-bottom:2px}
+  .setrow input{padding:8px;font-size:16px;text-align:center}
+  .bm{display:grid;grid-template-columns:1.4fr 1fr 1fr 1fr;gap:6px;align-items:end;margin-bottom:7px}
+  .bm .nm{font-size:12px;color:var(--muted);padding-bottom:11px}
+  .bm input{padding:9px;text-align:center;font-size:15px}
+  nav.tabs{position:fixed;bottom:0;left:0;right:0;background:rgba(11,15,20,.94);backdrop-filter:blur(12px);border-top:1px solid var(--line);display:flex;justify-content:center;z-index:50}
+  nav.tabs .inner{display:flex;max-width:720px;width:100%}
+  nav.tabs button{flex:1;background:none;border:none;border-radius:0;color:var(--dim);padding:10px 2px 14px;font-size:10px;font-weight:600;display:flex;flex-direction:column;align-items:center;gap:3px}
+  nav.tabs button .ico{font-size:17px;line-height:1}
+  nav.tabs button.on{color:var(--accent)}
+  .callout{border-left:3px solid var(--accent);background:var(--panel-2);padding:10px 12px;border-radius:0 10px 10px 10px;font-size:13px;line-height:1.5}
+  .callout.warn{border-color:var(--warn)} .callout.bad{border-color:var(--bad)} .callout.good{border-color:var(--good)}
+  pre{background:#080c11;border:1px solid var(--line);border-radius:10px;padding:11px;overflow:auto;font-family:var(--mono);font-size:11px;line-height:1.5;color:#b9c7d8;max-height:320px;white-space:pre-wrap}
+  .hint{font-size:12px;color:var(--dim);line-height:1.5}
+  .tag{font-family:var(--mono);font-size:11px;color:var(--dim)}
+  .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:94px;background:var(--panel);border:1px solid var(--line);padding:10px 16px;border-radius:12px;font-size:13px;z-index:80;opacity:0;transition:.25s;pointer-events:none;box-shadow:0 8px 30px rgba(0,0,0,.5)}
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(-6px)}
+  .nudge{background:#1c160a;border:1px solid #3b2f14;color:var(--warn);border-radius:12px;padding:11px 13px;font-size:13px;display:flex;justify-content:space-between;align-items:center;gap:10px}
+  .divider{height:1px;background:var(--line);margin:12px 0}
+  .fade{animation:f .22s ease} @keyframes f{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+  .exname{font-weight:700;font-size:15px}
+  .sev{display:flex;gap:5px}
+  .sev button{flex:1;padding:9px 0;font-size:11px}
+  .sev button.on[data-v="0"]{background:var(--good);color:#03121c;border:none}
+  .sev button.on[data-v="1"]{background:var(--warn);color:#1c0d00;border:none}
+  .sev button.on[data-v="2"]{background:#ff8a3d;color:#1c0d00;border:none}
+  .sev button.on[data-v="3"]{background:var(--bad);color:#fff;border:none}
+</style>
+</head>
+<body>
+<header class="app">
+  <div class="row" style="align-items:center;gap:9px">
+    <span class="brandmark">◎</span>
+    <div><h1>Coach</h1><div class="sub" id="hdrSub">loading…</div></div>
+  </div>
+  <button class="ghost sm" id="btnBackupTop">⇧ back up</button>
+</header>
+<main class="wrap" id="view"></main>
+<nav class="tabs"><div class="inner" id="tabbar"></div></nav>
+<div class="toast" id="toast"></div>
+
+<script>
+/* ==========================================================================
+   COACH — local-first deterministic training engine.
+   Implements coach-training-engine-spec.md (rev 2). No AI at runtime:
+   Claude is reached via Export Brief -> chat -> Import Plan (spec §6).
+
+   PRIVACY: this file ships with NO personal data. Your profile, goals,
+   constraints and benchmarks are entered on first run and stored ONLY in
+   your device's IndexedDB (plus whatever backups you export yourself).
+   ========================================================================== */
+
+/* ---------- IndexedDB key-value store ---------- */
+const DB='coachdb', ST='kv';
+function idb(){ return new Promise((res,rej)=>{ const r=indexedDB.open(DB,1);
+  r.onupgradeneeded=()=>r.result.createObjectStore(ST);
+  r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error); }); }
+async function kvGet(k){ const d=await idb(); return new Promise((res,rej)=>{
+  const q=d.transaction(ST,'readonly').objectStore(ST).get(k);
+  q.onsuccess=()=>res(q.result); q.onerror=()=>rej(q.error); }); }
+async function kvSet(k,v){ const d=await idb(); return new Promise((res,rej)=>{
+  const q=d.transaction(ST,'readwrite').objectStore(ST).put(v,k);
+  q.onsuccess=()=>res(); q.onerror=()=>rej(q.error); }); }
+
+/* ---------- helpers ---------- */
+const nowISO=()=>new Date().toISOString();
+const today=()=>new Date().toISOString().slice(0,10);
+const uid=p=>p+'_'+Date.now().toString(36)+Math.random().toString(36).slice(2,6);
+const clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
+const round=(x,s)=>s?Math.round(x/s)*s:x;
+const fmt=(n,d=1)=>(n==null||isNaN(n))?'—':(+n).toFixed(d).replace(/\.0$/,'');
+const daysBetween=(a,b)=>Math.abs(new Date(a)-new Date(b))/864e5;
+const dshort=iso=>new Date(iso).toLocaleDateString(undefined,{month:'short',day:'numeric'});
+const DOW=['sun','mon','tue','wed','thu','fri','sat'];
+const val=id=>{ const e=document.getElementById(id); return e? e.value : ''; };
+const num=id=>{ const v=parseFloat(val(id)); return isNaN(v)? null : v; };
+
+/* ---------- RPE -> %1RM  (reps-to-failure n = reps + (10 - RPE)) ---------- */
+const PCT={1:100,2:95.5,3:92.2,4:89.2,5:86.3,6:83.7,7:81.1,8:78.6,9:76.2,10:74.4,11:72.3,12:70.3,13:68,14:66,15:65};
+function pct(n){ if(n<=1)return 100; if(n>=15)return 65-(n-15)*1.5;
+  const lo=Math.floor(n),hi=Math.ceil(n); return PCT[lo]+(PCT[hi]-PCT[lo])*(n-lo); }
+const e1rmOf=(load,reps,rpe)=> (!load||!reps||!rpe)?0: load/(pct(reps+clamp(10-rpe,0,10))/100);
+const loadFor=(e1,reps,rpe,step)=> round(e1*(pct(reps+clamp(10-rpe,0,10))/100), step);
+
+/* ================= STATE ================= */
+let S={};
+const KEYS=['profile','goals','exercises','program','programHistory','sessions','meta'];
+const ex=id=>S.exercises.find(e=>e.id===id);
+const goal=id=>S.goals.find(g=>g.id===id);
+async function save(){ for(const k of KEYS) await kvSet(k,S[k]); }
+
+/* ================= SEED — generic, no personal data ================= */
+function seedState(){
+  const E=(id,name,pattern,equip,inc,tags,alts,cues)=>({id,name,pattern,equip,increment:inc,tags:tags||[],alternatives:alts||[],cues:cues||[]});
+  return {
+    profile:{ id:'usr', units:'metric', note:'', constraints:'' },
+    goals:[
+      {id:'g4',icon:'🦵',name:'Pain-free jogging',unit:'min',baseline:null,current:null,target:30,dir:'up',gate:true,
+       note:'THE gate — impact only progresses when the tissue earns it'},
+      {id:'g1',icon:'🏃',name:'Fast 5k',unit:'km/h',baseline:null,current:null,target:12,dir:'up',
+       note:'Set the baseline with a time-trial'},
+      {id:'g2',icon:'⏱️',name:'Cooper test',unit:'m',baseline:null,current:null,target:2400,dir:'up',
+       note:'12-minute test — set the baseline'},
+      {id:'g3',icon:'⚖️',name:'Bodyweight',unit:'kg',baseline:null,current:null,target:null,dir:'down',
+       note:'Diet-led. Training keeps muscle and builds the engine'},
+      {id:'g6',icon:'🎯',name:'Readiness goal',unit:'',baseline:null,current:null,target:null,dir:'up',qualitative:true,
+       note:''}
+    ],
+    exercises:[
+      E('trap_bar_dl','Trap-bar deadlift','hinge','trap bar',5,['back_sparing'],['hip_thrust','rdl'],['Upright chest, neutral spine — low shear']),
+      E('chest_press','Chest-press machine','h_push','machine',5,[],['db_bench'],['Stable base, controlled tempo']),
+      E('rfe_split_squat','RFE split squat (3-1-1)','squat','dumbbell',2.5,['knee_hsr','unilateral','back_sparing'],['leg_press','step_up'],['3 seconds down','Knee tissue, minimal spinal load']),
+      E('dead_bug','Dead bug','core','bodyweight',0,['anti_extension'],['bird_dog'],['Ribs DOWN — anti-extension','Exhale hard at the end']),
+      E('calf_tib','Calf raise + tibialis raise','calf','machine',2.5,[],[],['Ankle armour for running','Superset them']),
+      E('front_squat','Front squat','squat','barbell',2.5,['knee_hsr','back_sparing'],['goblet_squat','leg_press'],['Elbows high, stay vertical','Upright torso spares the back']),
+      E('cs_row','Chest-supported row','h_pull','machine',2.5,['back_sparing'],['cable_row'],['Chest stays down — zero lumbar load']),
+      E('hk_press','Half-kneeling DB press + hold','v_push','dumbbell',2.5,['anti_extension','tactical_stance'],['landmine_press'],['Ribs DOWN, no arch','3s hold at top — stable platform']),
+      E('spanish_squat','Spanish squat (isometric)','knee','band',0,['tendon_iso','knee_hsr'],['wall_sit'],['40s hold, knees behind the band','Evidence-based patellar tendon load']),
+      E('suitcase_carry','Suitcase carry','carry','dumbbell',2.5,['carry','anti_rotation','tactical_patrol'],['farmer_carry'],['Do NOT lean — anti-lateral-flexion','Loaded carriage + trunk in one']),
+      E('tgu','Turkish get-up','tactical','kettlebell',2,['tactical_contact','tactical_stance'],['half_get_up'],['Ground-to-standing','Slow and controlled']),
+      E('leg_press','Leg press','squat','machine',5,['back_sparing'],[],['Spares the spine; keep depth honest']),
+      E('goblet_squat','Goblet squat','squat','dumbbell',2.5,['back_sparing'],[],[]),
+      E('hip_thrust','Hip thrust','hinge','barbell',5,['back_sparing'],[],['Glutes without spinal load']),
+      E('rdl','Romanian deadlift (light)','hinge','dumbbell',2.5,['back_sparing'],[],['Sub-max only, neutral spine']),
+      E('bird_dog','Bird dog','core','bodyweight',0,['anti_rotation','back_sparing'],[],[]),
+      E('cable_row','Seated cable row','h_pull','cable',2.5,['back_sparing'],[],[]),
+      E('db_bench','DB bench press','h_push','dumbbell',2.5,[],[],[]),
+      E('landmine_press','Landmine press','v_push','barbell',2.5,['back_sparing'],[],[]),
+      E('wall_sit','Wall sit','knee','bodyweight',0,['tendon_iso'],[],[]),
+      E('step_up','Step-up','squat','dumbbell',2.5,['unilateral'],[],[]),
+      E('farmer_carry','Farmer carry','carry','dumbbell',2.5,['carry','tactical_patrol'],[],[]),
+      E('half_get_up','Half get-up','tactical','kettlebell',2,['tactical_contact'],[],['Back-friendly regression'])
+    ],
+    program:{
+      id:'prog_rebuild', version:1, status:'active', created_at:nowISO(), created_by:'engine',
+      phase:1, block_week:1,
+      rationale:'Phase 1 — Build. Aerobic engine + tissue tolerance. Low-impact base with one gated quality impact session; strength rebuild with knee-tendon heavy-slow-resistance and anti-extension core. Gym is strength only (45 min total).',
+      days:[
+        {id:'gym_a', dow:'mon', kind:'gym', label:'Gym A — Hinge / Push', slots:[
+          {id:'a1', exercise_id:'trap_bar_dl',     sets:3, reps:[5,5],   rpe:7,    rest:150},
+          {id:'a2', exercise_id:'chest_press',     sets:3, reps:[6,8],   rpe:7,    rest:120},
+          {id:'a3', exercise_id:'rfe_split_squat', sets:2, reps:[8,8],   rpe:6,    rest:90},
+          {id:'a4', exercise_id:'dead_bug',        sets:3, reps:[8,8],   rpe:null, rest:45},
+          {id:'a5', exercise_id:'calf_tib',        sets:2, reps:[15,15], rpe:null, rest:45}
+        ]},
+        {id:'run_tue', dow:'tue', kind:'run', modality:'run_walk', label:'Run — run/walk ladder',
+          note:'The gated impact session. Every bout stays under your symptom line — volume first, bout length later.'},
+        {id:'gym_b', dow:'wed', kind:'gym', label:'Gym B — Squat / Pull', slots:[
+          {id:'b1', exercise_id:'front_squat',    sets:3, reps:[5,5],   rpe:7,    rest:150},
+          {id:'b2', exercise_id:'cs_row',         sets:3, reps:[8,10],  rpe:7,    rest:90},
+          {id:'b3', exercise_id:'hk_press',       sets:2, reps:[8,8],   rpe:7,    rest:90},
+          {id:'b4', exercise_id:'spanish_squat',  sets:3, reps:[40,40], rpe:null, rest:60, isometric:true},
+          {id:'b5', exercise_id:'suitcase_carry', sets:3, reps:[20,20], rpe:null, rest:60, carry:true},
+          {id:'b6', exercise_id:'tgu',            sets:3, reps:[2,2],   rpe:6,    rest:60}
+        ]},
+        {id:'run_fri', dow:'fri', kind:'run', modality:'ruck', label:'Ruck / loaded walk',
+          note:'Zone 2 and loaded carriage in one session. Low impact. Progress the LOAD slowly.'},
+        {id:'run_sun', dow:'sun', kind:'run', modality:'zone2', label:'Long Zone 2 — easy',
+          note:'Nasal-breathing pace, RPE ≤4. Walk/jog mix — drop to walking the moment the knee talks.'}
+      ]
+    },
+    programHistory:[],
+    sessions:[],
+    meta:{ setup_done:false, seed_e1rm:{}, ladder:{jog:3,walk:2,rounds:5}, ruck:{load_kg:8,minutes:35},
+           last_backup:null, created_at:nowISO() }
+  };
+}
+
+/* ================= DERIVED — recomputed from the log, never authored ================= */
+function derive(){
+  const sess=[...S.sessions].sort((a,b)=>a.date.localeCompare(b.date));
+  const per={}, now=Date.now();
+  let run7=0, run28=0;
+
+  for(const s of sess){
+    const age=(now-new Date(s.date))/864e5;
+    if(s.kind==='gym'){
+      const best={};
+      for(const st of (s.sets||[])){
+        const d=per[st.exercise_id]||(per[st.exercise_id]={e1:0,hist:[],_drift:[],trend:'—',chg:0,rpe_drift:0});
+        const a=st.actual;
+        if(a.load_kg && a.reps && a.rpe){
+          const e=e1rmOf(a.load_kg,a.reps,a.rpe);
+          if(!best[st.exercise_id] || e>best[st.exercise_id]) best[st.exercise_id]=e;
+          if(st.prescribed && st.prescribed.rpe!=null) d._drift.push({age, v:a.rpe-st.prescribed.rpe});
+        }
+      }
+      for(const id in best) per[id].hist.push({date:s.date.slice(0,10), v:+best[id].toFixed(1)});
+    }
+    if(s.kind==='run'){
+      const m=s.duration_min||0;
+      if(age<=7)  run7+=m;
+      if(age<=28) run28+=m;
+    }
+  }
+
+  for(const id in per){
+    const d=per[id];
+    d.e1 = d.hist.length ? d.hist[d.hist.length-1].v : (S.meta.seed_e1rm[id]||0);
+    const rec=d._drift.filter(x=>x.age<=21).map(x=>x.v);
+    d.rpe_drift = rec.length ? +(rec.reduce((a,b)=>a+b,0)/rec.length).toFixed(2) : 0;
+    const t=d.hist.slice(-4);
+    if(t.length>=2){ d.chg=+(t[t.length-1].v-t[0].v).toFixed(1);
+      d.trend = d.chg>0.75?'progressing' : d.chg<-0.75?'regressing' : 'stalling'; }
+    else d.trend = d.hist.length?'baseline':'seed';
+    delete d._drift;
+  }
+  for(const id in (S.meta.seed_e1rm||{}))
+    if(S.meta.seed_e1rm[id] && !per[id]) per[id]={e1:S.meta.seed_e1rm[id],hist:[],rpe_drift:0,trend:'seed',chg:0};
+
+  /* symptom flares from morning checks — last 14 days */
+  const flares=[];
+  for(const s of sess){
+    if(s.kind!=='check') continue;
+    const age=(now-new Date(s.date))/864e5; if(age>14) continue;
+    for(const sy of (s.symptoms||[])) if(sy.severity>=2)
+      flares.push({date:s.date.slice(0,10), area:sy.area, severity:sy.severity, age});
+  }
+  const flareAreas=[...new Set(flares.map(f=>f.area))];
+
+  const bws=sess.filter(s=>s.kind==='check'&&s.bodyweight_kg);
+  const bw = bws.length? bws[bws.length-1].bodyweight_kg : null;
+
+  /* impact ladder — replayed from the log (§5.4) */
+  const L={...S.meta.ladder};
+  for(const r of sess.filter(s=>s.kind==='run'&&s.modality==='run_walk')){
+    const after=sess.filter(c=>c.kind==='check' && new Date(c.date)>new Date(r.date) && daysBetween(c.date,r.date)<=2);
+    let worst=0;
+    for(const c of after) for(const sy of (c.symptoms||[]))
+      if(['knee','ankle','back'].includes(sy.area)) worst=Math.max(worst, sy.severity);
+    if(worst>=2)       L.jog=Math.max(2, +(L.jog-1).toFixed(1));      // REGRESS
+    else if(worst===1) { /* HOLD */ }
+    else               L.jog=Math.min(30, round(L.jog*1.1, 0.5));     // PROGRESS
+  }
+
+  const flags=[];
+  for(const id in per){
+    const d=per[id]; if(!ex(id)) continue;
+    if(d.rpe_drift>=1.0) flags.push({sev:d.rpe_drift>=1.3?'act':'watch', t:ex(id).name+': RPE drifting +'+fmt(d.rpe_drift)+' — pull intensity'});
+    else if(d.trend==='regressing') flags.push({sev:'watch', t:ex(id).name+': e1RM down '+fmt(-d.chg)+' kg'});
+  }
+  for(const a of flareAreas){
+    const n=flares.filter(f=>f.area===a).length;
+    flags.push({sev:n>=2?'act':'watch', t:a+' flare ×'+n+' in 14 days — impact gated, exercises auto-swapped'});
+  }
+  return {per, run7, run28, flares, flareAreas, bw, ladder:L, flags};
+}
+
+function progressOf(g){
+  if(g.qualitative||g.current==null||g.baseline==null||g.target==null||g.target===g.baseline) return null;
+  return clamp((g.current-g.baseline)/(g.target-g.baseline),0,1);
+}
+
+/* ================= FAST LOOP (§5.1–5.5) ================= */
+function readinessScore(r){ if(!r) return 3;
+  return +(((r.sleep||3)+(6-(r.stress||3))+(6-(r.soreness||3))+(r.energy||3))/4).toFixed(2); }
+
+function planGym(day, readiness, D){
+  const mod=clamp((readinessScore(readiness)-3)*0.03, -0.06, 0.06);
+  return day.slots.map(sl=>{
+    let exId=sl.exercise_id, swapped=null;
+    if(D.flareAreas.includes('back') && ['trap_bar_dl','front_squat'].includes(exId)){
+      swapped=exId; exId = exId==='trap_bar_dl' ? 'hip_thrust' : 'leg_press';
+    } else if(D.flareAreas.includes('knee') && ['front_squat','rfe_split_squat'].includes(exId)){
+      swapped=exId; exId='leg_press';
+    }
+    const e=ex(exId), d=D.per[exId];
+    const targetReps=sl.reps[1], targetRpe=sl.rpe;
+    let suggested=null, basis='first time — log your working weight', mods=[];
+
+    if(sl.isometric){ basis=targetReps+'s hold'; }
+    else if(sl.carry){ basis=targetReps+' m per trip'; }
+    else if(targetRpe && d && d.e1>0){
+      let L=loadFor(d.e1, targetReps, targetRpe, e.increment||2.5);
+      basis='e1RM '+fmt(d.e1)+' kg → '+targetReps+'×@'+targetRpe;
+      if(d.rpe_drift>=1.0){ const c=round(L*0.05, e.increment||2.5); L-=c; mods.push('−'+fmt(c)+' drift'); }
+      if(Math.abs(mod)>=0.005){ const a=round(L*mod, e.increment||2.5); L+=a; mods.push((a>=0?'+':'')+fmt(a)+' readiness'); }
+      if(progressionEarned(exId, sl)){ L+=(e.increment||2.5); mods.push('+'+fmt(e.increment)+' progression'); }
+      suggested=Math.max(e.increment||2.5, round(L, e.increment||2.5));
+    }
+    return {slot:sl, ex:e, exId, swapped, targetReps, targetRpe, suggested, basis, mods};
+  });
+}
+function progressionEarned(exId, sl){
+  if(!sl.rpe) return false;
+  const last=[...S.sessions].filter(s=>s.kind==='gym'&&(s.sets||[]).some(x=>x.exercise_id===exId))
+    .sort((a,b)=>b.date.localeCompare(a.date))[0];
+  if(!last) return false;
+  const sets=last.sets.filter(x=>x.exercise_id===exId);
+  return sets.length>0 && sets.every(x=>x.actual.reps>=sl.reps[1] && x.actual.rpe!=null && x.actual.rpe<=sl.rpe);
+}
+function planRun(day, D){
+  const gated=D.flareAreas.some(a=>['knee','ankle','back'].includes(a));
+  const tol=goal('g4').baseline;
+  if(day.modality==='run_walk'){
+    const L=D.ladder;
+    if(gated) return {gated:true, headline:'⚠ Swap to LOW-IMPACT today',
+      detail:'Symptom flare logged — impact is gated. Do '+(L.rounds*(L.jog+L.walk))+' min easy on the crosstrainer or bike instead. Protecting the tissue IS the route to the 5k.'};
+    return {gated:false, headline:L.rounds+' × ('+fmt(L.jog)+' min jog / '+L.walk+' min walk)',
+      detail:fmt(L.jog*L.rounds)+' min of jogging total.'+(tol?' Each bout stays under your '+tol+'-min symptom line.':'')};
+  }
+  if(day.modality==='ruck'){ const r=S.meta.ruck;
+    return {gated:false, headline:r.minutes+' min ruck @ '+r.load_kg+' kg',
+      detail:'Zone 2 + loaded carriage in one. Brisk walk, neutral spine, no hunching. Progress the load slowly.'};
+  }
+  return {gated:false, headline:'35–45 min easy Zone 2',
+    detail: gated? 'Flare logged — keep it to walking or the crosstrainer today.' : 'Nasal-breathing pace, RPE ≤4. Walk/jog mix.'};
+}
+
+/* ================= BRIEF EXPORT (§6) ================= */
+function buildBrief(userNote){
+  const D=derive(), P=S.program, L=[];
+  L.push('# Coach — Training Brief');
+  L.push('_Generated '+today()+' · program '+P.id+' v'+P.version+' · phase '+P.phase+', block week '+P.block_week+'_');
+  L.push('');
+  L.push('## Athlete');
+  if(S.profile.note) L.push(S.profile.note);
+  if(S.profile.constraints) L.push('**Constraints (must program around these):** '+S.profile.constraints);
+  L.push('Week: Mon gym · Tue run · Wed gym · Fri ruck · Sun run. Gym is strength only, hard time cap.');
+  L.push('');
+  L.push('## Goals & progress');
+  for(const g of S.goals){
+    const p=progressOf(g);
+    const cur = g.id==='g3' && D.bw ? D.bw : g.current;
+    L.push('- **'+g.name+'**'+(g.gate?' _(GATE)_':'')+': '+(cur==null?'not set':fmt(cur)+' '+g.unit)+
+      ' → target '+(g.target==null?'—':g.target+' '+g.unit)+(p!=null?' ('+Math.round(p*100)+'%)':'')+
+      (g.qualitative&&g.note?' — '+g.note:''));
+  }
+  L.push('');
+  L.push('## Signals (computed from the log)');
+  L.push('- Running volume: '+Math.round(D.run7)+' min last 7d · '+Math.round(D.run28)+' min last 28d');
+  L.push('- Bodyweight: '+(D.bw?D.bw+' kg':'not logged')+(goal('g3').target?' (target '+goal('g3').target+' kg)':''));
+  L.push('- Impact ladder: '+fmt(D.ladder.jog)+' min jog × '+D.ladder.rounds+' rounds (walk '+D.ladder.walk+' min)');
+  L.push('- Strength:');
+  for(const id in D.per){
+    if(!ex(id)) continue; const d=D.per[id];
+    L.push('  - '+ex(id).name+': e1RM '+fmt(d.e1)+' kg · trend '+d.trend+
+      (d.chg?' ('+(d.chg>0?'+':'')+fmt(d.chg)+' kg)':'')+' · RPE drift '+(d.rpe_drift>0?'+':'')+fmt(d.rpe_drift));
+  }
+  L.push('');
+  L.push('## Symptoms (last 14 days)');
+  if(!D.flares.length) L.push('- None logged. Clean.');
+  else for(const f of D.flares) L.push('- '+f.date+': **'+f.area+'** severity '+f.severity+'/3');
+  L.push('');
+  L.push('## Flags');
+  if(!D.flags.length) L.push('- None. Progression is clear to run.');
+  else for(const f of D.flags) L.push('- ['+f.sev.toUpperCase()+'] '+f.t);
+  L.push('');
+  L.push('## Current program');
+  for(const d of P.days){
+    if(d.kind==='gym') L.push('- **'+d.dow.toUpperCase()+' — '+d.label+'**: '+d.slots.map(s=>
+      (ex(s.exercise_id)?ex(s.exercise_id).name:s.exercise_id)+' '+s.sets+'×'+
+      (s.reps[0]===s.reps[1]?s.reps[0]:s.reps.join('-'))+(s.rpe?' @RPE'+s.rpe:'')).join(' · '));
+    else L.push('- **'+d.dow.toUpperCase()+' — '+d.label+'** ('+d.modality+')');
+  }
+  L.push('');
+  L.push('## Recent sessions (last 10)');
+  const rec=[...S.sessions].sort((a,b)=>b.date.localeCompare(a.date)).slice(0,10);
+  if(!rec.length) L.push('- Nothing logged yet.');
+  for(const s of rec){
+    if(s.kind==='gym'){
+      const tops={};
+      for(const st of s.sets){
+        const e=e1rmOf(st.actual.load_kg,st.actual.reps,st.actual.rpe);
+        if(!tops[st.exercise_id] || e>tops[st.exercise_id].e) tops[st.exercise_id]={e,st};
+      }
+      L.push('- '+s.date.slice(0,10)+' **'+s.day_label+'** (readiness '+fmt(readinessScore(s.readiness))+'/5): '+
+        Object.keys(tops).map(id=>(ex(id)?ex(id).name:id)+' '+tops[id].st.actual.load_kg+'×'+tops[id].st.actual.reps+'@'+tops[id].st.actual.rpe).join('; ')+
+        (s.note?' — "'+s.note+'"':''));
+    } else if(s.kind==='run'){
+      L.push('- '+s.date.slice(0,10)+' **'+s.day_label+'** ('+s.modality+'): '+s.duration_min+' min'+
+        (s.distance_km?', '+s.distance_km+' km':'')+(s.load_kg?', '+s.load_kg+' kg':'')+', RPE '+(s.rpe||'—')+
+        (s.note?' — "'+s.note+'"':''));
+    } else {
+      const sy=(s.symptoms||[]).filter(x=>x.severity>0).map(x=>x.area+' '+x.severity).join(', ')||'clean';
+      L.push('- '+s.date.slice(0,10)+' **morning check**: '+sy+(s.bodyweight_kg?' · '+s.bodyweight_kg+' kg':'')+
+        (s.note?' — "'+s.note+'"':''));
+    }
+  }
+  L.push('');
+  if(userNote && userNote.trim()){ L.push('## My question'); L.push(userNote.trim()); L.push(''); }
+  L.push('---');
+  L.push('## Instructions for you (the coach)');
+  L.push('You are my strength & conditioning coach. Principles: the CONSTRAINT governs the plan, not the goal — tissue tolerance (pain-free jogging) gates ALL impact progression. Aerobic base first. Anti-fragility via graded exposure. RPE autoregulation. Respect my constraints above absolutely.');
+  L.push('');
+  L.push('1. Tell me in plain English what the data says and what you would change — tie every change to a GOAL.');
+  L.push('2. Then output the new plan as a SINGLE json code block matching this shape. Include only what you are changing. Use exercise ids from the current program.');
+  L.push('');
+  L.push('```json');
+  L.push(JSON.stringify({
+    rationale:'why this version exists — tied to my goals',
+    phase:P.phase, block_week:P.block_week+1,
+    ladder:{jog:D.ladder.jog, walk:D.ladder.walk, rounds:D.ladder.rounds},
+    ruck:S.meta.ruck,
+    days:[{id:'gym_a', slots:[{id:'a1', exercise_id:'trap_bar_dl', sets:3, reps:[5,5], rpe:7, rest:150}]}]
+  },null,2));
+  L.push('```');
+  return L.join('\n');
+}
+
+/* ================= IMPORT PLAN (§6) ================= */
+function importPlan(text){
+  let raw=(text||'').trim();
+  const m=raw.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if(m) raw=m[1].trim();
+  let p;
+  try{ p=JSON.parse(raw); }
+  catch(e){ throw new Error('Not valid JSON — ask Claude to re-send just the json block.'); }
+  if(!p||typeof p!=='object') throw new Error('Expected a JSON object.');
+
+  const cur=S.program;
+  const next=JSON.parse(JSON.stringify(cur));
+  next.version=cur.version+1; next.supersedes=cur.version;
+  next.created_at=nowISO(); next.created_by='claude';
+  if(p.rationale) next.rationale=p.rationale;
+  if(p.phase) next.phase=p.phase;
+  if(p.block_week) next.block_week=p.block_week;
+
+  if(Array.isArray(p.days)) for(const pd of p.days){
+    const d=next.days.find(x=>x.id===pd.id);
+    if(!d) continue;
+    if(pd.label) d.label=pd.label;
+    if(pd.modality) d.modality=pd.modality;
+    if(pd.note) d.note=pd.note;
+    if(Array.isArray(pd.slots)) for(const ps of pd.slots){
+      if(ps.exercise_id && !ex(ps.exercise_id)) throw new Error('Unknown exercise id "'+ps.exercise_id+'" — use ids from the current program.');
+      const s=d.slots.find(x=>x.id===ps.id);
+      if(s) Object.assign(s,ps); else d.slots.push(ps);
+    }
+  }
+  if(p.ladder) S.meta.ladder={...S.meta.ladder, ...p.ladder};
+  if(p.ruck)   S.meta.ruck={...S.meta.ruck, ...p.ruck};
+
+  S.programHistory.push({...cur, status:'archived'});
+  S.program=next;
+  return next;
+}
+
+/* ================= BACKUP ================= */
+function backupData(){ const d={_format:'coach/1', exported_at:nowISO()}; for(const k of KEYS) d[k]=S[k]; return d; }
+async function doBackup(){
+  const blob=new Blob([JSON.stringify(backupData(),null,2)],{type:'application/json'});
+  const name='coach-backup-'+today()+'.json';
+  try{
+    const file=new File([blob],name,{type:'application/json'});
+    if(navigator.canShare && navigator.canShare({files:[file]})){
+      await navigator.share({files:[file], title:'Coach backup'});   // Android share sheet → Save to Drive
+    } else {
+      const a=document.createElement('a');
+      a.href=URL.createObjectURL(blob); a.download=name; a.click();
+      setTimeout(()=>URL.revokeObjectURL(a.href),2000);
+    }
+    S.meta.last_backup=nowISO(); await save(); toast('Backed up ✓'); render();
+  }catch(e){ if(e && e.name==='AbortError') return; toast('Backup failed'); }
+}
+async function doRestore(file){
+  const d=JSON.parse(await file.text());
+  for(const k of KEYS) if(d[k]) S[k]=d[k];
+  await save(); App.draft=null; App.check=null; render(); toast('Restored ✓');
+}
+const backupAgeDays=()=> S.meta.last_backup ? daysBetween(new Date(), S.meta.last_backup) : (S.sessions.length?999:0);
+
+/* ================= UI ================= */
+const App={tab:'goals', draft:null, readiness:{sleep:3,stress:3,soreness:3,energy:3}, check:null, briefOut:null};
+function toast(m){ const t=document.getElementById('toast'); t.textContent=m; t.classList.add('show');
+  clearTimeout(t._t); t._t=setTimeout(()=>t.classList.remove('show'),1900); }
+const esc=s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const todaysDay=()=>S.program.days.find(d=>d.dow===DOW[new Date().getDay()])||null;
+
+function render(){
+  const setup=!S.meta.setup_done;
+  document.body.classList.toggle('setup', setup);
+  const D=derive();
+  document.getElementById('hdrSub').textContent = setup? 'first-run setup'
+    : 'v'+S.program.version+' · phase '+S.program.phase+' · wk '+S.program.block_week;
+  document.getElementById('btnBackupTop').style.display = setup? 'none':'';
+  const v=document.getElementById('view'); v.className='wrap fade';
+
+  if(setup){ v.innerHTML=vSetup(); document.getElementById('tabbar').innerHTML=''; wireSetup(); return; }
+
+  v.innerHTML = App.tab==='goals'? vGoals(D) : App.tab==='today'? vToday(D)
+              : App.tab==='check'? vCheck(D) : App.tab==='coach'? vCoach(D) : vData(D);
+  document.getElementById('tabbar').innerHTML=
+    [['goals','◎','Goals'],['today','◉','Today'],['check','♡','Check'],['coach','✦','Coach'],['data','◇','Data']]
+    .map(t=>'<button data-tab="'+t[0]+'" class="'+(App.tab===t[0]?'on':'')+'"><span class="ico">'+t[1]+'</span>'+t[2]+'</button>').join('');
+  wire(D);
+}
+
+/* ---------- FIRST-RUN SETUP (nothing personal ships in the code) ---------- */
+const BENCH=[['trap_bar_dl','Trap-bar deadlift'],['front_squat','Front squat'],['chest_press','Chest-press machine'],
+             ['cs_row','Chest-supported row'],['hk_press','Half-kneeling DB press']];
+function vSetup(){
+  return '<div class="col">'+
+    '<div class="card"><h3>Set up your coach</h3>'+
+      '<div class="hint">This app ships empty. Everything you enter stays <b>on this device</b> (plus the backups you export). Nothing is sent anywhere.</div></div>'+
+
+    '<div class="card"><h3>1 · About you</h3>'+
+      '<div><label class="f">Background — the coach reads this</label>'+
+      '<textarea id="sNote" placeholder="e.g. ex-pro athlete, power background, currently detrained, rebuilding. Trains before work — 45 min hard cap."></textarea></div>'+
+      '<div style="margin-top:10px"><label class="f">Injuries / limits it must program around</label>'+
+      '<textarea id="sCon" placeholder="Name each injury and what it rules out — e.g. &quot;bad lower back: no loaded spinal flexion, no heavy axial load&quot;. Be specific; these become hard rules."></textarea></div>'+
+    '</div>'+
+
+    '<div class="card"><h3>2 · Your goals</h3>'+
+      '<div class="grid g2">'+
+        '<div><label class="f">Bodyweight now (kg)</label><input type="number" inputmode="decimal" step="0.1" id="sBwNow"></div>'+
+        '<div><label class="f">Bodyweight target</label><input type="number" inputmode="decimal" step="0.1" id="sBwTgt"></div>'+
+        '<div><label class="f">Pain-free jog NOW (min)</label><input type="number" inputmode="numeric" id="sJogNow" placeholder="10"></div>'+
+        '<div><label class="f">Jog target (min)</label><input type="number" inputmode="numeric" id="sJogTgt" value="30"></div>'+
+        '<div><label class="f">5k target (km/h)</label><input type="number" inputmode="decimal" step="0.1" id="sSpd" value="12"></div>'+
+        '<div><label class="f">Cooper target (m)</label><input type="number" inputmode="numeric" id="sCoop" value="2400"></div>'+
+      '</div>'+
+      '<div style="margin-top:10px"><label class="f">Your own goal — name</label>'+
+        '<input id="sG6" placeholder="e.g. Work capacity"></div>'+
+      '<div style="margin-top:10px"><label class="f">…and what it means</label>'+
+        '<input id="sG6n" placeholder="the specific demands it has to cover"></div>'+
+      '<div class="hint" style="margin-top:8px">The jog number is the <b>gate</b> — it governs how fast impact is allowed to grow.</div>'+
+    '</div>'+
+
+    '<div class="card"><h3>3 · Benchmarks (optional)</h3>'+
+      '<div class="hint" style="margin-bottom:10px">A recent hard set per lift. The engine turns these into starting loads. Leave blank to set the weight in the gym instead.</div>'+
+      '<div class="bm"><div class="nm"></div><div><label class="f">kg</label></div><div><label class="f">reps</label></div><div><label class="f">RPE</label></div></div>'+
+      BENCH.map(b=>'<div class="bm"><div class="nm">'+b[1]+'</div>'+
+        '<div><input type="number" inputmode="decimal" step="0.5" id="bk_'+b[0]+'"></div>'+
+        '<div><input type="number" inputmode="numeric" id="br_'+b[0]+'"></div>'+
+        '<div><input type="number" inputmode="decimal" step="0.5" min="5" max="10" id="bp_'+b[0]+'"></div></div>').join('')+
+    '</div>'+
+
+    '<button class="primary" id="btnSetup" style="padding:16px">Start training →</button>'+
+    '<div class="hint" style="text-align:center">You can change all of this later. Nothing here leaves your phone.</div>'+
+  '</div>';
+}
+function wireSetup(){
+  document.getElementById('btnSetup').onclick=async()=>{
+    const jog=num('sJogNow');
+    if(!jog) return toast('Enter your pain-free jog minutes — it is the gate');
+
+    S.profile.note=val('sNote').trim();
+    S.profile.constraints=val('sCon').trim();
+
+    const g4=goal('g4'); g4.baseline=jog; g4.current=jog; g4.target=num('sJogTgt')||30;
+    const g3=goal('g3'); g3.baseline=num('sBwNow'); g3.current=num('sBwNow'); g3.target=num('sBwTgt');
+    goal('g1').target=num('sSpd')||12;
+    goal('g2').target=num('sCoop')||2400;
+    const g6=goal('g6');
+    if(val('sG6').trim()) g6.name=val('sG6').trim();
+    g6.note=val('sG6n').trim();
+
+    /* benchmarks -> e1RM seeds */
+    const seeds={};
+    for(const b of BENCH){
+      const kg=num('bk_'+b[0]), reps=num('br_'+b[0]), rpe=num('bp_'+b[0]);
+      if(kg&&reps&&rpe){ const e=e1rmOf(kg,reps,rpe); if(e>0) seeds[b[0]]=+e.toFixed(1); }
+    }
+    S.meta.seed_e1rm=seeds;
+
+    /* ladder derived from the gate: bouts at ~half your tolerance, ~20 min of jogging */
+    const j=clamp(round(jog/2,0.5),2,8);
+    S.meta.ladder={ jog:j, walk:2, rounds:clamp(Math.round(20/j),3,6) };
+
+    S.meta.setup_done=true;
+    await save(); App.tab='goals'; render(); toast('Coach is ready ✓');
+  };
+}
+
+function nudgeHTML(){
+  const age=backupAgeDays();
+  if(!S.sessions.length || age<7) return '';
+  return '<div class="nudge"><div>⚠ <b>'+(age>900?'Never backed up':Math.round(age)+' days')+'</b> since your last backup.</div>'+
+    '<button class="sm" id="btnNudge" style="background:var(--warn);color:#1c0d00;border:none">Back up</button></div>';
+}
+
+function vGoals(D){
+  const bars=S.goals.map(g=>{
+    const p=progressOf(g);
+    const cur = g.id==='g3' && D.bw ? D.bw : g.current;
+    return '<div class="goal"><div class="top">'+
+      '<div class="nm">'+g.icon+' '+g.name+(g.gate?' <span class="pill warn">gate</span>':'')+'</div>'+
+      '<div class="val">'+(cur==null?'—':fmt(cur)+' '+g.unit)+(g.target!=null?' <span class="dim">/ '+g.target+' '+g.unit+'</span>':'')+'</div></div>'+
+      (p!=null?'<div class="bar '+(g.gate?'gate':'')+'"><i style="width:'+Math.round(p*100)+'%"></i></div>':'')+
+      '<div class="hint" style="margin-top:7px">'+(g.note||'')+(p!=null?' · <b>'+Math.round(p*100)+'%</b>':'')+'</div></div>';
+  }).join('');
+  const flags = D.flags.length
+    ? '<div class="card"><h3>Flags</h3><div class="col">'+D.flags.map(f=>
+        '<div class="callout '+(f.sev==='act'?'bad':'warn')+'"><b>'+f.sev.toUpperCase()+'</b> — '+f.t+'</div>').join('')+'</div></div>'
+    : '<div class="card"><div class="callout good">No flags. Progression is clear to run.</div></div>';
+  return '<div class="col">'+nudgeHTML()+
+    '<div class="card"><h3>Goals — everything serves these</h3><div class="col">'+bars+'</div>'+
+    '<div class="divider"></div><div class="hint">The <b>gate</b> governs the plan: impact only progresses when the tissue earns it. Protecting it <i>is</i> the fastest route to the 5k.</div></div>'+
+    flags+
+    '<div class="card"><h3>This week</h3><div class="grid g3">'+
+      '<div class="goal"><div class="hint">Run 7d</div><div class="nm">'+Math.round(D.run7)+'<span class="dim" style="font-size:11px"> min</span></div></div>'+
+      '<div class="goal"><div class="hint">Run 28d</div><div class="nm">'+Math.round(D.run28)+'<span class="dim" style="font-size:11px"> min</span></div></div>'+
+      '<div class="goal"><div class="hint">Jog bout</div><div class="nm">'+fmt(D.ladder.jog)+'<span class="dim" style="font-size:11px"> min</span></div></div>'+
+    '</div><div class="hint" style="margin-top:10px">MON gym · TUE run · WED gym · FRI ruck · SUN run — Thu &amp; Sat rest</div></div>'+
+  '</div>';
+}
+
+function vToday(D){
+  const day=todaysDay();
+  if(!day) return '<div class="col">'+nudgeHTML()+
+    '<div class="card"><h3>Today</h3><div class="callout good">Rest day. Recovery is where the adaptation happens.</div>'+
+    '<div class="hint" style="margin-top:10px">MON gym · TUE run · WED gym · FRI ruck · SUN run</div>'+
+    '<button class="ghost" id="btnAnyDay" style="width:100%;margin-top:12px">Do a morning check instead</button></div></div>';
+  return day.kind==='gym' ? vGym(day,D) : vRun(day,D);
+}
+
+function vGym(day,D){
+  if(!App.draft || App.draft.dayId!==day.id) App.draft={dayId:day.id, rows:planGym(day,App.readiness,D), actuals:{}};
+  const scale=(k,l)=>'<div><label class="f">'+l+'</label><div class="seg" data-r="'+k+'">'+
+    [1,2,3,4,5].map(n=>'<button class="'+(App.readiness[k]===n?'on':'')+'" data-v="'+n+'">'+n+'</button>').join('')+'</div></div>';
+  return '<div class="col">'+nudgeHTML()+
+    '<div class="card"><h3>Readiness — 10 seconds, before you lift</h3><div class="col">'+
+      scale('sleep','Sleep')+scale('energy','Energy')+scale('stress','Stress')+scale('soreness','Soreness')+
+    '</div><div class="hint" style="margin-top:8px">Score '+fmt(readinessScore(App.readiness))+'/5 — shifts today\'s loads by up to ±6%.</div></div>'+
+    '<div><div class="exname">'+day.label+'</div><div class="tag">strength only · keep it tight</div></div>'+
+    App.draft.rows.map(gymSlot).join('')+
+    '<div class="card"><label class="f">Session note</label><textarea id="sessNote" placeholder="Anything the numbers won\'t show…"></textarea></div>'+
+    '<button class="primary" id="btnLogGym" style="padding:15px">Log session →</button>'+
+  '</div>';
+}
+function gymSlot(r){
+  const sl=r.slot;
+  if(!App.draft.actuals[sl.id]) App.draft.actuals[sl.id]=Array.from({length:sl.sets},()=>({
+    load: r.suggested!=null? r.suggested : '', reps: sl.reps[1], rpe:'' }));
+  const arr=App.draft.actuals[sl.id];
+  const unit = sl.isometric?'sec' : sl.carry?'metres' : 'kg';
+  const head = r.suggested!=null ? r.suggested+' kg'
+             : sl.isometric ? sl.reps[1]+'s hold'
+             : sl.carry ? sl.reps[1]+' m'
+             : '—';
+  return '<div class="card">'+
+    '<div class="row" style="justify-content:space-between;align-items:baseline">'+
+      '<div class="exname">'+r.ex.name+'</div>'+
+      '<div class="tag">'+sl.sets+'×'+(sl.reps[0]===sl.reps[1]?sl.reps[0]:sl.reps.join('-'))+(sl.rpe?' @'+sl.rpe:'')+'</div></div>'+
+    (r.swapped?'<div class="callout warn" style="margin-top:8px">⇄ Swapped from <b>'+ex(r.swapped).name+'</b> — symptom flare logged. Protecting the tissue.</div>':'')+
+    '<div class="callout '+(r.mods.some(m=>m.indexOf('drift')>=0)?'warn':'info')+'" style="margin-top:8px">'+
+      '<b>'+head+'</b> <span class="dim">· '+r.basis+'</span>'+
+      (r.mods.length?'<div class="mono dim" style="font-size:11px;margin-top:3px">'+r.mods.join(' · ')+'</div>':'')+'</div>'+
+    (r.ex.cues.length?'<div class="hint" style="margin-top:6px">'+r.ex.cues.map(c=>'• '+c).join('<br>')+'</div>':'')+
+    '<div style="margin-top:10px">'+arr.map((a,si)=>
+      '<div class="setrow"><div class="idx">'+(si+1)+'</div>'+
+      '<div><small>'+unit+'</small><input type="number" inputmode="decimal" step="'+(sl.isometric||sl.carry?5:(r.ex.increment||2.5))+'" data-s="'+sl.id+'" data-i="'+si+'" data-k="load" value="'+a.load+'"></div>'+
+      '<div><small>'+(sl.isometric?'—':'reps')+'</small><input type="number" inputmode="numeric" data-s="'+sl.id+'" data-i="'+si+'" data-k="reps" value="'+a.reps+'"'+(sl.isometric?' disabled':'')+'></div>'+
+      '<div><small>RPE</small><input type="number" inputmode="decimal" step="0.5" min="5" max="10" data-s="'+sl.id+'" data-i="'+si+'" data-k="rpe" value="'+a.rpe+'" placeholder="?"></div></div>').join('')+
+    '</div></div>';
+}
+
+function vRun(day,D){
+  const p=planRun(day,D);
+  if(!App.draft || App.draft.dayId!==day.id)
+    App.draft={dayId:day.id, run:{load: day.modality==='ruck'? S.meta.ruck.load_kg : ''}};
+  return '<div class="col">'+nudgeHTML()+
+    '<div class="card"><div class="exname">'+day.label+'</div>'+
+      '<div class="callout '+(p.gated?'bad':'good')+'" style="margin-top:10px"><b>'+p.headline+'</b>'+
+        '<div class="muted" style="margin-top:5px">'+p.detail+'</div></div>'+
+      '<div class="hint" style="margin-top:8px">'+(day.note||'')+'</div></div>'+
+    '<div class="card"><h3>Log it</h3><div class="grid g2">'+
+      '<div><label class="f">Duration (min)</label><input type="number" inputmode="numeric" id="rDur"></div>'+
+      '<div><label class="f">Distance (km)</label><input type="number" inputmode="decimal" step="0.1" id="rDist"></div>'+
+      '<div><label class="f">RPE</label><input type="number" inputmode="decimal" step="0.5" min="1" max="10" id="rRpe"></div>'+
+      (day.modality==='ruck'
+        ? '<div><label class="f">Load (kg)</label><input type="number" inputmode="decimal" step="0.5" id="rLoad" value="'+App.draft.run.load+'"></div>'
+        : '<div></div>')+
+    '</div>'+
+    '<div style="margin-top:10px"><label class="f">Note</label><textarea id="rNote" placeholder="How did the knee and back feel?"></textarea></div>'+
+    '<button class="primary" id="btnLogRun" style="width:100%;margin-top:12px;padding:15px">Log run →</button>'+
+    '<div class="hint" style="margin-top:8px">Tomorrow morning, open <b>Check</b> — that is what moves the ladder.</div></div>'+
+  '</div>';
+}
+
+const AREAS=[['knee','Knee'],['back','Lower back'],['ankle','Ankle'],['shoulder','Shoulder'],['other','Other']];
+function vCheck(D){
+  if(!App.check) App.check={symptoms:Object.fromEntries(AREAS.map(a=>[a[0],0]))};
+  const c=App.check;
+  const done=S.sessions.some(s=>s.kind==='check'&&s.date.slice(0,10)===today());
+  const recent=S.sessions.filter(s=>s.kind==='check').sort((a,b)=>b.date.localeCompare(a.date)).slice(0,7);
+  return '<div class="col">'+nudgeHTML()+
+    '<div class="card"><h3>Morning check — how does the body feel?</h3>'+
+      '<div class="hint" style="margin-bottom:12px">The most important input you give the engine. Flares <b>gate your impact</b> and <b>swap your exercises</b> automatically.</div>'+
+      (done?'<div class="callout good" style="margin-bottom:12px">✓ Already checked in today.</div>':'')+
+      '<div class="col">'+AREAS.map(a=>
+        '<div><label class="f">'+a[1]+'</label><div class="sev" data-area="'+a[0]+'">'+
+        [0,1,2,3].map(n=>'<button data-v="'+n+'" class="'+(c.symptoms[a[0]]===n?'on':'')+'">'+['none','mild','mod','high'][n]+'</button>').join('')+
+        '</div></div>').join('')+
+        '<div><label class="f">Bodyweight (kg) — optional</label><input type="number" inputmode="decimal" step="0.1" id="cBw" placeholder="'+(D.bw||goal('g3').baseline||'')+'"></div>'+
+        '<div><label class="f">Note</label><textarea id="cNote" placeholder="Knee after yesterday\'s run? Sleep? Stress?"></textarea></div>'+
+      '</div>'+
+      '<button class="primary" id="btnLogCheck" style="width:100%;margin-top:12px;padding:15px">Log check →</button></div>'+
+    '<div class="card"><h3>Recent checks</h3>'+
+      (recent.length? recent.map(s=>{
+        const sy=(s.symptoms||[]).filter(x=>x.severity>0);
+        return '<div class="row" style="justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid var(--line)">'+
+          '<span class="mono dim">'+s.date.slice(5,10)+'</span>'+
+          '<span>'+(sy.length? sy.map(x=>'<span class="pill '+(x.severity>=2?'bad':'warn')+'">'+x.area+' '+x.severity+'</span>').join(' ') : '<span class="pill good">clean</span>')+'</span>'+
+          '<span class="mono dim">'+(s.bodyweight_kg? s.bodyweight_kg+'kg':'')+'</span></div>';
+      }).join('') : '<div class="hint">Nothing yet.</div>')+
+    '</div></div>';
+}
+
+function vCoach(D){
+  return '<div class="col">'+nudgeHTML()+
+    '<div class="card"><h3>Program v'+S.program.version+' · phase '+S.program.phase+'</h3>'+
+      '<div class="callout">'+S.program.rationale+'</div></div>'+
+    '<div class="card"><h3>1 · Export brief → Claude</h3>'+
+      '<div class="hint">The engine runs itself. Bring Claude in when it is stuck: a stall past two deloads, repeated flares, a goal change, or a phase transition.</div>'+
+      '<div style="margin-top:10px"><label class="f">Anything to ask the coach?</label>'+
+      '<textarea id="briefNote" placeholder="e.g. knee has been quiet — can I add a second run?"></textarea></div>'+
+      '<div class="grid g2" style="margin-top:10px">'+
+        '<button class="primary" id="btnBrief">Generate brief</button>'+
+        '<button id="btnCopyBrief"'+(App.briefOut?'':' disabled')+'>Copy</button></div>'+
+      (App.briefOut? '<pre style="margin-top:10px">'+esc(App.briefOut)+'</pre>' : '')+
+    '</div>'+
+    '<div class="card"><h3>2 · Import Claude\'s plan</h3>'+
+      '<div class="hint">Paste the <span class="mono">json</span> block back. Creates a new version — the old one is archived, never overwritten.</div>'+
+      '<textarea id="planIn" style="margin-top:10px;min-height:110px" placeholder="Paste the json code block here"></textarea>'+
+      '<button class="primary" id="btnImportPlan" style="width:100%;margin-top:10px">Apply as v'+(S.program.version+1)+'</button>'+
+    '</div></div>';
+}
+
+function vData(D){
+  const age=backupAgeDays();
+  return '<div class="col">'+
+    '<div class="card"><h3>Backup</h3>'+
+      '<div class="callout '+(age>=7?'warn':'good')+'">'+
+        (S.meta.last_backup? 'Last backup <b>'+Math.round(age)+' days</b> ago ('+dshort(S.meta.last_backup)+').' : 'No backup yet.')+'</div>'+
+      '<div class="hint" style="margin-top:8px">Back up → Android share sheet → <b>Drive</b> → <span class="mono">Coach Backups</span>. Weekly is plenty.</div>'+
+      '<div class="grid g2" style="margin-top:10px">'+
+        '<button class="primary" id="btnBackup">⇧ Back up now</button>'+
+        '<button id="btnRestore">⇩ Restore</button></div>'+
+      '<input type="file" id="fileIn" accept="application/json,.json" style="display:none"></div>'+
+    '<div class="card"><h3>Storage</h3><div class="hint" id="storeInfo">checking…</div>'+
+      '<div class="hint" style="margin-top:6px">'+S.sessions.length+' sessions · program v'+S.program.version+' · '+S.programHistory.length+' archived version(s)</div></div>'+
+    '<div class="card"><h3>Danger</h3><button class="ghost" id="btnReset" style="width:100%">Reset everything</button>'+
+      '<div class="hint" style="margin-top:6px">Back up first — this cannot be undone.</div></div>'+
+  '</div>';
+}
+
+/* ================= WIRE ================= */
+function wire(D){
+  document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>{ App.tab=b.dataset.tab; App.briefOut=null; render(); });
+  document.getElementById('btnBackupTop').onclick=doBackup;
+  const nb=document.getElementById('btnNudge'); if(nb) nb.onclick=doBackup;
+
+  document.querySelectorAll('[data-r]').forEach(seg=>seg.querySelectorAll('button').forEach(b=>b.onclick=()=>{
+    App.readiness[seg.dataset.r]=+b.dataset.v; App.draft=null; render(); }));
+  document.querySelectorAll('[data-area]').forEach(seg=>seg.querySelectorAll('button').forEach(b=>b.onclick=()=>{
+    App.check.symptoms[seg.dataset.area]=+b.dataset.v; render(); }));
+  document.querySelectorAll('input[data-s]').forEach(i=>i.oninput=()=>{
+    App.draft.actuals[i.dataset.s][+i.dataset.i][i.dataset.k] = i.value===''?'':+i.value; });
+
+  const b1=document.getElementById('btnLogGym');   if(b1) b1.onclick=logGym;
+  const b2=document.getElementById('btnLogRun');   if(b2) b2.onclick=logRun;
+  const b3=document.getElementById('btnLogCheck'); if(b3) b3.onclick=logCheck;
+  const b4=document.getElementById('btnAnyDay');   if(b4) b4.onclick=()=>{ App.tab='check'; render(); };
+
+  const bb=document.getElementById('btnBrief');
+  if(bb) bb.onclick=()=>{ const n=document.getElementById('briefNote');
+    App.briefOut=buildBrief(n?n.value:''); render(); toast('Brief ready — copy it'); };
+  const cb=document.getElementById('btnCopyBrief');
+  if(cb) cb.onclick=async()=>{ try{ await navigator.clipboard.writeText(App.briefOut); toast('Copied ✓'); }
+    catch(e){ toast('Select the text and copy manually'); } };
+  const ip=document.getElementById('btnImportPlan');
+  if(ip) ip.onclick=async()=>{
+    const t=document.getElementById('planIn');
+    if(!t || !t.value.trim()) return toast('Paste the json block first');
+    try{ const n=importPlan(t.value); await save(); toast('Program v'+n.version+' applied ✓'); render(); }
+    catch(e){ toast(e.message); }
+  };
+
+  const bk=document.getElementById('btnBackup');  if(bk) bk.onclick=doBackup;
+  const rs=document.getElementById('btnRestore'); if(rs) rs.onclick=()=>document.getElementById('fileIn').click();
+  const fi=document.getElementById('fileIn');
+  if(fi) fi.onchange=e=>{ if(e.target.files[0]) doRestore(e.target.files[0]).catch(()=>toast('Bad backup file')); };
+  const rst=document.getElementById('btnReset');
+  if(rst) rst.onclick=async()=>{ if(!confirm('Wipe everything? Back up first.')) return;
+    S=seedState(); await save(); App.draft=null; App.check=null; render(); toast('Reset'); };
+
+  const si=document.getElementById('storeInfo');
+  if(si && navigator.storage && navigator.storage.persisted){
+    navigator.storage.persisted().then(async p=>{
+      let mb='?';
+      try{ const e=await navigator.storage.estimate(); if(e&&e.usage) mb=(e.usage/1048576).toFixed(2); }catch(_){}
+      si.innerHTML=(p? '✅ <b>Persistent</b> — Android has agreed not to evict your data.'
+                     : '⚠️ Not persistent yet — install to your home screen to secure it.')+' <span class="dim">('+mb+' MB used)</span>';
+    }).catch(()=>{ si.textContent='Storage status unavailable.'; });
+  }
+}
+
+/* ================= LOGGERS (append-only) ================= */
+async function logGym(){
+  const day=S.program.days.find(d=>d.id===App.draft.dayId);
+  const sets=[];
+  for(const r of App.draft.rows){
+    const arr=App.draft.actuals[r.slot.id]||[];
+    arr.forEach((a,i)=>{
+      if(a.load===''&&a.reps==='') return;
+      sets.push({ id:uid('set'), exercise_id:r.exId, set_index:i+1,
+        prescribed:{ load_kg:r.suggested!=null?r.suggested:null, reps:r.targetReps, rpe:r.targetRpe!=null?r.targetRpe:null },
+        actual:{ load_kg:a.load===''?0:+a.load, reps:a.reps===''?0:+a.reps, rpe:a.rpe===''?null:+a.rpe } });
+    });
+  }
+  if(!sets.length) return toast('Log at least one set');
+  S.sessions.push({ id:uid('s'), kind:'gym', date:nowISO(), day_id:day.id, day_label:day.label,
+    program_id:S.program.id, program_version:S.program.version, readiness:{...App.readiness}, sets,
+    note:val('sessNote'), created_at:nowISO() });
+  await save(); App.draft=null; App.tab='goals'; render(); toast('Session logged ✓');
+}
+async function logRun(){
+  const day=S.program.days.find(d=>d.id===App.draft.dayId);
+  const dur=num('rDur');
+  if(!dur) return toast('Enter the duration');
+  const dist=num('rDist');
+  const s={ id:uid('s'), kind:'run', date:nowISO(), day_id:day.id, day_label:day.label,
+    program_id:S.program.id, program_version:S.program.version, modality:day.modality,
+    duration_min:dur, distance_km:dist, rpe:num('rRpe'),
+    load_kg: day.modality==='ruck' ? num('rLoad') : null,
+    note:val('rNote'), created_at:nowISO() };
+  if(dist && dur) s.speed_kmh=+((dist/(dur/60)).toFixed(2));
+  S.sessions.push(s);
+  if(day.modality==='ruck' && s.load_kg) S.meta.ruck.load_kg=s.load_kg;
+  await save(); App.draft=null; App.tab='goals'; render(); toast('Run logged ✓ — check in tomorrow morning');
+}
+async function logCheck(){
+  const bw=num('cBw');
+  S.sessions.push({ id:uid('s'), kind:'check', date:nowISO(),
+    symptoms:AREAS.map(a=>({area:a[0], severity:App.check.symptoms[a[0]]||0})),
+    bodyweight_kg:bw, note:val('cNote'), created_at:nowISO() });
+  if(bw) goal('g3').current=bw;
+  App.check=null; await save(); App.tab='goals'; render(); toast('Check logged ✓');
+}
+
+/* ================= BOOT ================= */
+(async function boot(){
+  try{
+    const p=await kvGet('profile');
+    if(!p){ S=seedState(); await save(); }
+    else {
+      S={}; for(const k of KEYS) S[k]=await kvGet(k);
+      const seed=seedState();
+      for(const k of KEYS) if(!S[k]) S[k]=seed[k];
+      if(S.meta.setup_done===undefined) S.meta.setup_done=true;   // pre-setup installs keep working
+    }
+    try{ if(navigator.storage && navigator.storage.persist) await navigator.storage.persist(); }catch(_){}
+    render();
+    if('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(()=>{});
+  }catch(e){
+    document.getElementById('view').innerHTML='<div class="card"><h3>Startup error</h3><pre>'+esc(e.message)+'</pre></div>';
+  }
+})();
+</script>
+</body>
+</html>
