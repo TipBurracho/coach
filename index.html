@@ -4,6 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <meta name="theme-color" content="#0b0f14" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'" />
 <link rel="manifest" href="./manifest.webmanifest" />
 <link rel="icon" href="./icon.svg" />
 <link rel="apple-touch-icon" href="./icon.svg" />
@@ -133,6 +134,18 @@ const dshort=iso=>new Date(iso).toLocaleDateString(undefined,{month:'short',day:
 const DOW=['sun','mon','tue','wed','thu','fri','sat'];
 const val=id=>{ const e=document.getElementById(id); return e? e.value : ''; };
 const num=id=>{ const v=parseFloat(val(id)); return isNaN(v)? null : v; };
+
+/* ---------- untrusted-input hardening ----------
+   Plans and backups are pasted/loaded from outside the app. Everything that
+   comes in gets parsed with prototype keys dropped, then shape-checked and
+   bounded. Rendering escapes on top of this (defence in depth).            */
+const PROTO_KEYS=['__proto__','constructor','prototype'];
+const dropProto=(k,v)=> PROTO_KEYS.includes(k) ? undefined : v;
+const parseUntrusted=t=>JSON.parse(t,dropProto);
+const isObj=o=>o&&typeof o==='object'&&!Array.isArray(o);
+const sStr=(v,max)=> typeof v==='string' ? v.slice(0,max||300) : '';
+function sInt(v,min,max,dflt){ const n=Number(v); return Number.isFinite(n)? clamp(Math.round(n),min,max) : dflt; }
+function sNum(v,min,max,dflt){ const n=Number(v); return Number.isFinite(n)? clamp(n,min,max) : dflt; }
 
 /* ---------- RPE -> %1RM  (reps-to-failure n = reps + (10 - RPE)) ---------- */
 const PCT={1:100,2:95.5,3:92.2,4:89.2,5:86.3,6:83.7,7:81.1,8:78.6,9:76.2,10:74.4,11:72.3,12:70.3,13:68,14:66,15:65};
@@ -458,37 +471,71 @@ function buildBrief(userNote){
 }
 
 /* ================= IMPORT PLAN (§6) ================= */
+const MODALITIES=['run_walk','ruck','zone2'];
+/* Copy ONLY known fields, each bounded. Never Object.assign untrusted input. */
+function sanitizeSlot(ps, existing){
+  const out = existing ? JSON.parse(JSON.stringify(existing)) : {id:sStr(ps.id,64)||uid('slot')};
+  if(ps.exercise_id!==undefined){
+    if(!ex(ps.exercise_id)) throw new Error('Unknown exercise id "'+sStr(ps.exercise_id,40)+'" — use ids from the current program.');
+    out.exercise_id=ps.exercise_id;
+  }
+  if(!out.exercise_id) throw new Error('A slot is missing its exercise_id.');
+  if(ps.sets!==undefined) out.sets=sInt(ps.sets,1,10,3);
+  if(ps.reps!==undefined){
+    const r=Array.isArray(ps.reps)? ps.reps : [ps.reps,ps.reps];
+    out.reps=[sInt(r[0],1,300,5), sInt(r[1],1,300,5)];
+    if(out.reps[1]<out.reps[0]) out.reps[1]=out.reps[0];
+  }
+  if(ps.rpe!==undefined)  out.rpe = ps.rpe===null? null : sNum(ps.rpe,5,10,7);
+  if(ps.rest!==undefined) out.rest=sInt(ps.rest,0,900,90);
+  if(ps.isometric!==undefined) out.isometric=!!ps.isometric;
+  if(ps.carry!==undefined)     out.carry=!!ps.carry;
+  return out;
+}
 function importPlan(text){
   let raw=(text||'').trim();
+  if(raw.length>500000) throw new Error('That input is too large to be a plan.');
   const m=raw.match(/```(?:json)?\s*([\s\S]*?)```/);
   if(m) raw=m[1].trim();
   let p;
-  try{ p=JSON.parse(raw); }
+  try{ p=parseUntrusted(raw); }
   catch(e){ throw new Error('Not valid JSON — ask Claude to re-send just the json block.'); }
-  if(!p||typeof p!=='object') throw new Error('Expected a JSON object.');
+  if(!isObj(p)) throw new Error('Expected a JSON object.');
 
   const cur=S.program;
   const next=JSON.parse(JSON.stringify(cur));
   next.version=cur.version+1; next.supersedes=cur.version;
   next.created_at=nowISO(); next.created_by='claude';
-  if(p.rationale) next.rationale=p.rationale;
-  if(p.phase) next.phase=p.phase;
-  if(p.block_week) next.block_week=p.block_week;
+  if(p.rationale!==undefined)  next.rationale=sStr(p.rationale,2000) || next.rationale;
+  if(p.phase!==undefined)      next.phase=sInt(p.phase,1,10,next.phase);
+  if(p.block_week!==undefined) next.block_week=sInt(p.block_week,1,52,next.block_week);
 
-  if(Array.isArray(p.days)) for(const pd of p.days){
+  if(Array.isArray(p.days)) for(const pd of p.days.slice(0,20)){
+    if(!isObj(pd)) continue;
     const d=next.days.find(x=>x.id===pd.id);
     if(!d) continue;
-    if(pd.label) d.label=pd.label;
-    if(pd.modality) d.modality=pd.modality;
-    if(pd.note) d.note=pd.note;
-    if(Array.isArray(pd.slots)) for(const ps of pd.slots){
-      if(ps.exercise_id && !ex(ps.exercise_id)) throw new Error('Unknown exercise id "'+ps.exercise_id+'" — use ids from the current program.');
-      const s=d.slots.find(x=>x.id===ps.id);
-      if(s) Object.assign(s,ps); else d.slots.push(ps);
+    if(pd.label!==undefined)    d.label=sStr(pd.label,80) || d.label;
+    if(pd.note!==undefined)     d.note=sStr(pd.note,500);
+    if(pd.modality!==undefined && MODALITIES.includes(pd.modality)) d.modality=pd.modality;
+    if(Array.isArray(pd.slots)){
+      if(!Array.isArray(d.slots)) continue;              // never add lifts to a run day
+      for(const ps of pd.slots.slice(0,12)){
+        if(!isObj(ps)) continue;
+        const i=d.slots.findIndex(x=>x.id===ps.id);
+        if(i>=0) d.slots[i]=sanitizeSlot(ps,d.slots[i]);
+        else if(d.slots.length<12) d.slots.push(sanitizeSlot(ps,null));
+      }
     }
   }
-  if(p.ladder) S.meta.ladder={...S.meta.ladder, ...p.ladder};
-  if(p.ruck)   S.meta.ruck={...S.meta.ruck, ...p.ruck};
+  if(isObj(p.ladder)) S.meta.ladder={
+    jog:    sNum(p.ladder.jog,    1, 60, S.meta.ladder.jog),
+    walk:   sNum(p.ladder.walk,   0, 30, S.meta.ladder.walk),
+    rounds: sInt(p.ladder.rounds, 1, 20, S.meta.ladder.rounds)
+  };
+  if(isObj(p.ruck)) S.meta.ruck={
+    load_kg: sNum(p.ruck.load_kg, 0, 60,  S.meta.ruck.load_kg),
+    minutes: sInt(p.ruck.minutes, 5, 300, S.meta.ruck.minutes)
+  };
 
   S.programHistory.push({...cur, status:'archived'});
   S.program=next;
@@ -497,24 +544,84 @@ function importPlan(text){
 
 /* ================= BACKUP ================= */
 function backupData(){ const d={_format:'coach/1', exported_at:nowISO()}; for(const k of KEYS) d[k]=S[k]; return d; }
+
+let backupBusy=false;
+let lastBackupError=null;
+function setBackupBusy(b){
+  ['btnBackupTop','btnBackup','btnNudge'].forEach(id=>{
+    const el=document.getElementById(id);
+    if(el){ el.disabled=b; if(b) el.dataset.lbl=el.textContent, el.textContent='working…';
+            else if(el.dataset.lbl) el.textContent=el.dataset.lbl; }
+  });
+}
+/* Export is tried share -> download -> clipboard. Each layer reports the REAL
+   error. save()/render() run AFTER, outside the try, so a successful export is
+   never reported as a failure. Re-entrancy guarded: the Web Share API rejects
+   concurrent calls, and a double-tap used to surface as "Backup failed".      */
 async function doBackup(){
-  const blob=new Blob([JSON.stringify(backupData(),null,2)],{type:'application/json'});
+  if(backupBusy){ toast('Backup already in progress…'); return; }
+  backupBusy=true; setBackupBusy(true);
+  lastBackupError=null;
+  let done=false, how='', cancelled=false;
+  const json=JSON.stringify(backupData(),null,2);
   const name='coach-backup-'+today()+'.json';
+  const blob=new Blob([json],{type:'application/json'});
+
   try{
-    const file=new File([blob],name,{type:'application/json'});
-    if(navigator.canShare && navigator.canShare({files:[file]})){
-      await navigator.share({files:[file], title:'Coach backup'});   // Android share sheet → Save to Drive
-    } else {
-      const a=document.createElement('a');
-      a.href=URL.createObjectURL(blob); a.download=name; a.click();
-      setTimeout(()=>URL.revokeObjectURL(a.href),2000);
+    // 1) Android share sheet -> Save to Drive
+    try{
+      if(navigator.canShare && typeof File!=='undefined'){
+        const file=new File([blob],name,{type:'application/json'});
+        if(navigator.canShare({files:[file]})){
+          await navigator.share({files:[file]});   // no title: some Android builds reject title+files
+          done=true; how='share';
+        }
+      }
+    }catch(e){
+      if(e && e.name==='AbortError'){ cancelled=true; }
+      else { lastBackupError=e; console.error('[backup] share failed:',e); }
     }
-    S.meta.last_backup=nowISO(); await save(); toast('Backed up ✓'); render();
-  }catch(e){ if(e && e.name==='AbortError') return; toast('Backup failed'); }
+    // 2) download fallback
+    if(!done && !cancelled){
+      try{
+        const url=URL.createObjectURL(blob);
+        const a=document.createElement('a');
+        a.href=url; a.download=name; a.rel='noopener';
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(()=>URL.revokeObjectURL(url),4000);
+        done=true; how='download';
+      }catch(e){ lastBackupError=e; console.error('[backup] download failed:',e); }
+    }
+    // 3) clipboard fallback — last resort, still gets the data off the device
+    if(!done && !cancelled){
+      try{ await navigator.clipboard.writeText(json); done=true; how='clipboard'; }
+      catch(e){ lastBackupError=e; console.error('[backup] clipboard failed:',e); }
+    }
+  } finally { backupBusy=false; setBackupBusy(false); }
+
+  if(cancelled){ toast('Backup cancelled'); return; }
+
+  if(done){
+    try{ S.meta.last_backup=nowISO(); await save(); }
+    catch(e){ console.error('[backup] exported OK but saving the timestamp failed:',e); }
+    toast(how==='clipboard' ? 'Copied to clipboard ✓ — paste it somewhere safe'
+        : how==='download'  ? 'Backup downloaded ✓' : 'Backed up ✓');
+    try{ render(); }catch(e){ console.error('[backup] render after backup failed:',e); }
+  } else {
+    const e=lastBackupError;
+    toast('Backup failed — '+(e ? (e.name||'Error')+': '+(e.message||'no detail') : 'no export method available'));
+  }
 }
 async function doRestore(file){
-  const d=JSON.parse(await file.text());
-  for(const k of KEYS) if(d[k]) S[k]=d[k];
+  if(file.size>20*1024*1024) throw new Error('That file is too large to be a backup.');
+  const d=parseUntrusted(await file.text());
+  if(!isObj(d)) throw new Error('Not a backup file.');
+  if(d._format!=='coach/1') throw new Error('Unrecognised backup format.');
+  if(!Array.isArray(d.sessions) || !isObj(d.program) || !Array.isArray(d.goals) || !Array.isArray(d.exercises))
+    throw new Error('Backup is missing required data — refusing to load it.');
+  for(const k of KEYS) if(d[k]!==undefined) S[k]=d[k];
+  if(!isObj(S.meta)) S.meta=seedState().meta;
+  if(!Array.isArray(S.programHistory)) S.programHistory=[];
   await save(); App.draft=null; App.check=null; render(); toast('Restored ✓');
 }
 const backupAgeDays=()=> S.meta.last_backup ? daysBetween(new Date(), S.meta.last_backup) : (S.sessions.length?999:0);
@@ -634,14 +741,14 @@ function vGoals(D){
     const p=progressOf(g);
     const cur = g.id==='g3' && D.bw ? D.bw : g.current;
     return '<div class="goal"><div class="top">'+
-      '<div class="nm">'+g.icon+' '+g.name+(g.gate?' <span class="pill warn">gate</span>':'')+'</div>'+
-      '<div class="val">'+(cur==null?'—':fmt(cur)+' '+g.unit)+(g.target!=null?' <span class="dim">/ '+g.target+' '+g.unit+'</span>':'')+'</div></div>'+
+      '<div class="nm">'+esc(g.icon||'')+' '+esc(g.name||'')+(g.gate?' <span class="pill warn">gate</span>':'')+'</div>'+
+      '<div class="val">'+(cur==null?'—':fmt(cur)+' '+esc(g.unit||''))+(g.target!=null?' <span class="dim">/ '+esc(g.target)+' '+esc(g.unit||'')+'</span>':'')+'</div></div>'+
       (p!=null?'<div class="bar '+(g.gate?'gate':'')+'"><i style="width:'+Math.round(p*100)+'%"></i></div>':'')+
-      '<div class="hint" style="margin-top:7px">'+(g.note||'')+(p!=null?' · <b>'+Math.round(p*100)+'%</b>':'')+'</div></div>';
+      '<div class="hint" style="margin-top:7px">'+esc(g.note||'')+(p!=null?' · <b>'+Math.round(p*100)+'%</b>':'')+'</div></div>';
   }).join('');
   const flags = D.flags.length
     ? '<div class="card"><h3>Flags</h3><div class="col">'+D.flags.map(f=>
-        '<div class="callout '+(f.sev==='act'?'bad':'warn')+'"><b>'+f.sev.toUpperCase()+'</b> — '+f.t+'</div>').join('')+'</div></div>'
+        '<div class="callout '+(f.sev==='act'?'bad':'warn')+'"><b>'+esc(f.sev.toUpperCase())+'</b> — '+esc(f.t)+'</div>').join('')+'</div></div>'
     : '<div class="card"><div class="callout good">No flags. Progression is clear to run.</div></div>';
   return '<div class="col">'+nudgeHTML()+
     '<div class="card"><h3>Goals — everything serves these</h3><div class="col">'+bars+'</div>'+
@@ -672,7 +779,7 @@ function vGym(day,D){
     '<div class="card"><h3>Readiness — 10 seconds, before you lift</h3><div class="col">'+
       scale('sleep','Sleep')+scale('energy','Energy')+scale('stress','Stress')+scale('soreness','Soreness')+
     '</div><div class="hint" style="margin-top:8px">Score '+fmt(readinessScore(App.readiness))+'/5 — shifts today\'s loads by up to ±6%.</div></div>'+
-    '<div><div class="exname">'+day.label+'</div><div class="tag">strength only · keep it tight</div></div>'+
+    '<div><div class="exname">'+esc(day.label)+'</div><div class="tag">strength only · keep it tight</div></div>'+
     App.draft.rows.map(gymSlot).join('')+
     '<div class="card"><label class="f">Session note</label><textarea id="sessNote" placeholder="Anything the numbers won\'t show…"></textarea></div>'+
     '<button class="primary" id="btnLogGym" style="padding:15px">Log session →</button>'+
@@ -690,13 +797,13 @@ function gymSlot(r){
              : '—';
   return '<div class="card">'+
     '<div class="row" style="justify-content:space-between;align-items:baseline">'+
-      '<div class="exname">'+r.ex.name+'</div>'+
-      '<div class="tag">'+sl.sets+'×'+(sl.reps[0]===sl.reps[1]?sl.reps[0]:sl.reps.join('-'))+(sl.rpe?' @'+sl.rpe:'')+'</div></div>'+
-    (r.swapped?'<div class="callout warn" style="margin-top:8px">⇄ Swapped from <b>'+ex(r.swapped).name+'</b> — symptom flare logged. Protecting the tissue.</div>':'')+
+      '<div class="exname">'+esc(r.ex.name)+'</div>'+
+      '<div class="tag">'+esc(sl.sets)+'×'+esc(sl.reps[0]===sl.reps[1]?sl.reps[0]:sl.reps.join('-'))+(sl.rpe?' @'+esc(sl.rpe):'')+'</div></div>'+
+    (r.swapped?'<div class="callout warn" style="margin-top:8px">⇄ Swapped from <b>'+esc(ex(r.swapped).name)+'</b> — symptom flare logged. Protecting the tissue.</div>':'')+
     '<div class="callout '+(r.mods.some(m=>m.indexOf('drift')>=0)?'warn':'info')+'" style="margin-top:8px">'+
-      '<b>'+head+'</b> <span class="dim">· '+r.basis+'</span>'+
-      (r.mods.length?'<div class="mono dim" style="font-size:11px;margin-top:3px">'+r.mods.join(' · ')+'</div>':'')+'</div>'+
-    (r.ex.cues.length?'<div class="hint" style="margin-top:6px">'+r.ex.cues.map(c=>'• '+c).join('<br>')+'</div>':'')+
+      '<b>'+esc(head)+'</b> <span class="dim">· '+esc(r.basis)+'</span>'+
+      (r.mods.length?'<div class="mono dim" style="font-size:11px;margin-top:3px">'+esc(r.mods.join(' · '))+'</div>':'')+'</div>'+
+    (r.ex.cues.length?'<div class="hint" style="margin-top:6px">'+r.ex.cues.map(c=>'• '+esc(c)).join('<br>')+'</div>':'')+
     '<div style="margin-top:10px">'+arr.map((a,si)=>
       '<div class="setrow"><div class="idx">'+(si+1)+'</div>'+
       '<div><small>'+unit+'</small><input type="number" inputmode="decimal" step="'+(sl.isometric||sl.carry?5:(r.ex.increment||2.5))+'" data-s="'+sl.id+'" data-i="'+si+'" data-k="load" value="'+a.load+'"></div>'+
@@ -710,10 +817,10 @@ function vRun(day,D){
   if(!App.draft || App.draft.dayId!==day.id)
     App.draft={dayId:day.id, run:{load: day.modality==='ruck'? S.meta.ruck.load_kg : ''}};
   return '<div class="col">'+nudgeHTML()+
-    '<div class="card"><div class="exname">'+day.label+'</div>'+
-      '<div class="callout '+(p.gated?'bad':'good')+'" style="margin-top:10px"><b>'+p.headline+'</b>'+
-        '<div class="muted" style="margin-top:5px">'+p.detail+'</div></div>'+
-      '<div class="hint" style="margin-top:8px">'+(day.note||'')+'</div></div>'+
+    '<div class="card"><div class="exname">'+esc(day.label)+'</div>'+
+      '<div class="callout '+(p.gated?'bad':'good')+'" style="margin-top:10px"><b>'+esc(p.headline)+'</b>'+
+        '<div class="muted" style="margin-top:5px">'+esc(p.detail)+'</div></div>'+
+      '<div class="hint" style="margin-top:8px">'+esc(day.note||'')+'</div></div>'+
     '<div class="card"><h3>Log it</h3><div class="grid g2">'+
       '<div><label class="f">Duration (min)</label><input type="number" inputmode="numeric" id="rDur"></div>'+
       '<div><label class="f">Distance (km)</label><input type="number" inputmode="decimal" step="0.1" id="rDist"></div>'+
@@ -750,17 +857,17 @@ function vCheck(D){
       (recent.length? recent.map(s=>{
         const sy=(s.symptoms||[]).filter(x=>x.severity>0);
         return '<div class="row" style="justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid var(--line)">'+
-          '<span class="mono dim">'+s.date.slice(5,10)+'</span>'+
-          '<span>'+(sy.length? sy.map(x=>'<span class="pill '+(x.severity>=2?'bad':'warn')+'">'+x.area+' '+x.severity+'</span>').join(' ') : '<span class="pill good">clean</span>')+'</span>'+
-          '<span class="mono dim">'+(s.bodyweight_kg? s.bodyweight_kg+'kg':'')+'</span></div>';
+          '<span class="mono dim">'+esc(String(s.date).slice(5,10))+'</span>'+
+          '<span>'+(sy.length? sy.map(x=>'<span class="pill '+(x.severity>=2?'bad':'warn')+'">'+esc(x.area)+' '+esc(x.severity)+'</span>').join(' ') : '<span class="pill good">clean</span>')+'</span>'+
+          '<span class="mono dim">'+(s.bodyweight_kg? esc(s.bodyweight_kg)+'kg':'')+'</span></div>';
       }).join('') : '<div class="hint">Nothing yet.</div>')+
     '</div></div>';
 }
 
 function vCoach(D){
   return '<div class="col">'+nudgeHTML()+
-    '<div class="card"><h3>Program v'+S.program.version+' · phase '+S.program.phase+'</h3>'+
-      '<div class="callout">'+S.program.rationale+'</div></div>'+
+    '<div class="card"><h3>Program v'+esc(S.program.version)+' · phase '+esc(S.program.phase)+'</h3>'+
+      '<div class="callout">'+esc(S.program.rationale||'')+'</div></div>'+
     '<div class="card"><h3>1 · Export brief → Claude</h3>'+
       '<div class="hint">The engine runs itself. Bring Claude in when it is stuck: a stall past two deloads, repeated flares, a goal change, or a phase transition.</div>'+
       '<div style="margin-top:10px"><label class="f">Anything to ask the coach?</label>'+
@@ -787,9 +894,11 @@ function vData(D){
       '<div class="grid g2" style="margin-top:10px">'+
         '<button class="primary" id="btnBackup">⇧ Back up now</button>'+
         '<button id="btnRestore">⇩ Restore</button></div>'+
-      '<input type="file" id="fileIn" accept="application/json,.json" style="display:none"></div>'+
+      '<input type="file" id="fileIn" accept="application/json,.json" style="display:none">'+
+      (lastBackupError? '<div class="hint" style="margin-top:8px;color:var(--bad)">Last error — '+esc((lastBackupError.name||'Error')+': '+(lastBackupError.message||''))+'</div>':'')+
+      '</div>'+
     '<div class="card"><h3>Storage</h3><div class="hint" id="storeInfo">checking…</div>'+
-      '<div class="hint" style="margin-top:6px">'+S.sessions.length+' sessions · program v'+S.program.version+' · '+S.programHistory.length+' archived version(s)</div></div>'+
+      '<div class="hint" style="margin-top:6px">'+esc(S.sessions.length)+' sessions · program v'+esc(S.program.version)+' · '+esc(S.programHistory.length)+' archived version(s)</div></div>'+
     '<div class="card"><h3>Danger</h3><button class="ghost" id="btnReset" style="width:100%">Reset everything</button>'+
       '<div class="hint" style="margin-top:6px">Back up first — this cannot be undone.</div></div>'+
   '</div>';

@@ -1,6 +1,6 @@
-/* Coach PWA service worker — app shell cache so it works offline in the gym.
+﻿/* Coach PWA service worker - app shell cache so it works offline in the gym.
    Bump CACHE when you change the app to force clients to update. */
-const CACHE = 'coach-v1';
+const CACHE = 'coach-v2';
 const ASSETS = ['./', './index.html', './manifest.webmanifest', './icon.svg'];
 
 self.addEventListener('install', (e) => {
