@@ -187,7 +187,8 @@ function seedState(){
       E('front_squat','Front squat','squat','barbell',2.5,['knee_hsr','back_sparing'],['goblet_squat','leg_press'],['Elbows high, stay vertical','Upright torso spares the back']),
       E('cs_row','Chest-supported row','h_pull','machine',2.5,['back_sparing'],['cable_row'],['Chest stays down — zero lumbar load']),
       E('hk_press','Half-kneeling DB press + hold','v_push','dumbbell',2.5,['anti_extension','tactical_stance'],['landmine_press'],['Ribs DOWN, no arch','3s hold at top — stable platform']),
-      E('spanish_squat','Spanish squat (isometric)','knee','band',0,['tendon_iso','knee_hsr'],['wall_sit'],['40s hold, knees behind the band','Evidence-based patellar tendon load']),
+      E('leg_extension','Leg extension (3-1-1 tempo)','knee','machine',5,['knee_hsr','back_sparing'],['spanish_squat','wall_sit'],['3s down, 1s pause — slow is the point','Heavy-slow-resistance: the evidence-based patellar tendon load','Stop ~2 reps shy. Tendon work, not a burnout set']),
+      E('spanish_squat','Spanish squat (isometric)','knee','band',0,['tendon_iso','knee_hsr'],['leg_extension','wall_sit'],['40s hold, knees behind the band','Band alternative if no leg-extension machine']),
       E('suitcase_carry','Suitcase carry','carry','dumbbell',2.5,['carry','anti_rotation','tactical_patrol'],['farmer_carry'],['Do NOT lean — anti-lateral-flexion','Loaded carriage + trunk in one']),
       E('tgu','Turkish get-up','tactical','kettlebell',2,['tactical_contact','tactical_stance'],['half_get_up'],['Ground-to-standing','Slow and controlled']),
       E('leg_press','Leg press','squat','machine',5,['back_sparing'],[],['Spares the spine; keep depth honest']),
@@ -221,7 +222,7 @@ function seedState(){
           {id:'b1', exercise_id:'front_squat',    sets:3, reps:[5,5],   rpe:7,    rest:150},
           {id:'b2', exercise_id:'cs_row',         sets:3, reps:[8,10],  rpe:7,    rest:90},
           {id:'b3', exercise_id:'hk_press',       sets:2, reps:[8,8],   rpe:7,    rest:90},
-          {id:'b4', exercise_id:'spanish_squat',  sets:3, reps:[40,40], rpe:null, rest:60, isometric:true},
+          {id:'b4', exercise_id:'leg_extension',  sets:3, reps:[6,8],   rpe:7,    rest:90},
           {id:'b5', exercise_id:'suitcase_carry', sets:3, reps:[20,20], rpe:null, rest:60, carry:true},
           {id:'b6', exercise_id:'tgu',            sets:3, reps:[2,2],   rpe:6,    rest:60}
         ]},
@@ -327,8 +328,29 @@ function progressOf(g){
 function readinessScore(r){ if(!r) return 3;
   return +(((r.sleep||3)+(6-(r.stress||3))+(6-(r.soreness||3))+(r.energy||3))/4).toFixed(2); }
 
+/* Readiness -> whole PLATE STEPS, not a percentage.
+   A percentage band cannot survive plate rounding: -1.5% of a 105 kg trap bar
+   is -1.6 kg, which rounds to nothing, so moderate readiness silently did
+   nothing and the 1-5 scale collapsed into three outcomes. Steps are always
+   expressible, monotonic, and legible. (Supersedes the old +/-6% band.) */
+function readinessSteps(score){
+  if(score>=4.00) return  1;
+  if(score>=2.75) return  0;
+  if(score>=2.25) return -1;
+  if(score>=1.75) return -2;
+  return -3;
+}
+function readinessVerdict(score){
+  const s=readinessSteps(score);
+  return s>0   ? 'green light — one step up'
+       : s===0 ? 'normal range — loads unchanged'
+       : s===-1? 'backing off one step'
+       : s===-2? 'backing off two steps'
+       :         'heavily backed off — consider making today a walk';
+}
+
 function planGym(day, readiness, D){
-  const mod=clamp((readinessScore(readiness)-3)*0.03, -0.06, 0.06);
+  const steps=readinessSteps(readinessScore(readiness));
   return day.slots.map(sl=>{
     let exId=sl.exercise_id, swapped=null;
     if(D.flareAreas.includes('back') && ['trap_bar_dl','front_squat'].includes(exId)){
@@ -346,7 +368,7 @@ function planGym(day, readiness, D){
       let L=loadFor(d.e1, targetReps, targetRpe, e.increment||2.5);
       basis='e1RM '+fmt(d.e1)+' kg → '+targetReps+'×@'+targetRpe;
       if(d.rpe_drift>=1.0){ const c=round(L*0.05, e.increment||2.5); L-=c; mods.push('−'+fmt(c)+' drift'); }
-      if(Math.abs(mod)>=0.005){ const a=round(L*mod, e.increment||2.5); L+=a; mods.push((a>=0?'+':'')+fmt(a)+' readiness'); }
+      if(steps!==0){ const a=steps*(e.increment||2.5); L+=a; mods.push((a>0?'+':'')+fmt(a)+' readiness'); }
       if(progressionEarned(exId, sl)){ L+=(e.increment||2.5); mods.push('+'+fmt(e.increment)+' progression'); }
       suggested=Math.max(e.increment||2.5, round(L, e.increment||2.5));
     }
@@ -778,7 +800,9 @@ function vGym(day,D){
   return '<div class="col">'+nudgeHTML()+
     '<div class="card"><h3>Readiness — 10 seconds, before you lift</h3><div class="col">'+
       scale('sleep','Sleep')+scale('energy','Energy')+scale('stress','Stress')+scale('soreness','Soreness')+
-    '</div><div class="hint" style="margin-top:8px">Score '+fmt(readinessScore(App.readiness))+'/5 — shifts today\'s loads by up to ±6%.</div></div>'+
+    '</div><div class="callout '+(readinessSteps(readinessScore(App.readiness))<0?'warn':'info')+'" style="margin-top:10px">'+
+      '<b>Readiness '+fmt(readinessScore(App.readiness))+'/5</b> — '+esc(readinessVerdict(readinessScore(App.readiness)))+
+    '</div></div>'+
     '<div><div class="exname">'+esc(day.label)+'</div><div class="tag">strength only · keep it tight</div></div>'+
     App.draft.rows.map(gymSlot).join('')+
     '<div class="card"><label class="f">Session note</label><textarea id="sessNote" placeholder="Anything the numbers won\'t show…"></textarea></div>'+
@@ -915,7 +939,8 @@ function wire(D){
   document.querySelectorAll('[data-area]').forEach(seg=>seg.querySelectorAll('button').forEach(b=>b.onclick=()=>{
     App.check.symptoms[seg.dataset.area]=+b.dataset.v; render(); }));
   document.querySelectorAll('input[data-s]').forEach(i=>i.oninput=()=>{
-    App.draft.actuals[i.dataset.s][+i.dataset.i][i.dataset.k] = i.value===''?'':+i.value; });
+    App.draft.actuals[i.dataset.s][+i.dataset.i][i.dataset.k] = i.value===''?'':+i.value;
+    if(i.dataset.k==='rpe') applyRpeCap(i.dataset.s, +i.dataset.i); });
 
   const b1=document.getElementById('btnLogGym');   if(b1) b1.onclick=logGym;
   const b2=document.getElementById('btnLogRun');   if(b2) b2.onclick=logRun;
@@ -953,6 +978,33 @@ function wire(D){
                      : '⚠️ Not persistent yet — install to your home screen to secure it.')+' <span class="dim">('+mb+' MB used)</span>';
     }).catch(()=>{ si.textContent='Storage status unavailable.'; });
   }
+}
+
+/* RPE cap (spec §5.1): a set logged above target+1 pulls the REMAINING unlogged
+   sets down one increment. Updates the inputs directly rather than re-rendering,
+   so it never steals focus mid-set. Idempotent — always derived from this set's
+   own load, so retyping the RPE can't stack reductions. */
+function applyRpeCap(slotId, setIdx){
+  if(!App.draft || !App.draft.rows) return;
+  const row=App.draft.rows.find(r=>r.slot.id===slotId);
+  if(!row || !row.slot.rpe || row.slot.isometric || row.slot.carry) return;
+  const arr=App.draft.actuals[slotId]; if(!arr) return;
+  const a=arr[setIdx];
+  if(a.rpe===''||a.rpe==null||isNaN(a.rpe)) return;
+  if(a.rpe - row.slot.rpe <= 1) return;                 // within tolerance
+  const inc=row.ex.increment||2.5;
+  const cur=(a.load===''||a.load==null)? row.suggested : +a.load;
+  if(cur==null||isNaN(cur)) return;
+  const next=Math.max(inc, round(cur-inc, inc));
+  let changed=0;
+  for(let j=setIdx+1;j<arr.length;j++){
+    if(arr[j].rpe!=='' && arr[j].rpe!=null) continue;   // already logged — leave it
+    if(arr[j].load===next) continue;
+    arr[j].load=next; changed++;
+    const el=document.querySelector('input[data-s="'+slotId+'"][data-i="'+j+'"][data-k="load"]');
+    if(el) el.value=next;
+  }
+  if(changed) toast('RPE '+a.rpe+' over target '+row.slot.rpe+' — remaining sets → '+next+' kg');
 }
 
 /* ================= LOGGERS (append-only) ================= */
