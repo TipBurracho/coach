@@ -77,6 +77,24 @@
   .toast.show{opacity:1;transform:translateX(-50%) translateY(-6px)}
   .nudge{background:#1c160a;border:1px solid #3b2f14;color:var(--warn);border-radius:12px;padding:11px 13px;font-size:13px;display:flex;justify-content:space-between;align-items:center;gap:10px}
   .divider{height:1px;background:var(--line);margin:12px 0}
+  .pill.dim{color:var(--dim)}
+  .calrow{border-bottom:1px solid var(--line)}
+  .calrow:last-child{border-bottom:none}
+  .calrow .hd{display:flex;justify-content:space-between;align-items:center;padding:11px 4px;cursor:pointer;gap:8px}
+  .calrow.istoday .hd{background:linear-gradient(90deg,rgba(76,194,255,.10),transparent)}
+  .calrow.pre .hd{opacity:.4}
+  .calrow .date{font-family:var(--mono);color:var(--dim);font-size:11px;width:62px;display:inline-block}
+  .calrow .lbl{font-size:13px}
+  .calrow .glyph{font-size:13px;margin-left:5px}
+  .calrow .glyph.flare{color:var(--bad)} .calrow .glyph.clean{color:var(--good)} .calrow .glyph.open{color:var(--dim)}
+  .calrow .detail{padding:2px 6px 14px}
+  .calweeklbl{font-size:10px;text-transform:uppercase;letter-spacing:.12em;color:var(--accent);text-align:center;padding:9px 0 3px;border-top:1px dashed var(--line);margin-top:3px}
+  .menu{position:fixed;inset:0;z-index:70;background:rgba(0,0,0,.5);display:none}
+  .menu.open{display:block}
+  .menu .panel{position:absolute;top:56px;right:12px;background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden;min-width:180px;box-shadow:0 12px 40px rgba(0,0,0,.55)}
+  .menu .panel button{display:flex;align-items:center;gap:10px;width:100%;border:none;border-radius:0;background:none;justify-content:flex-start;padding:14px 16px;border-bottom:1px solid var(--line)}
+  .menu .panel button:last-child{border-bottom:none}
+  .menu .panel button .ico{font-size:16px;width:18px;text-align:center}
   .fade{animation:f .22s ease} @keyframes f{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
   .exname{font-weight:700;font-size:15px}
   .sev{display:flex;gap:5px}
@@ -93,10 +111,11 @@
     <span class="brandmark">◎</span>
     <div><h1>Coach</h1><div class="sub" id="hdrSub">loading…</div></div>
   </div>
-  <button class="ghost sm" id="btnBackupTop">⇧ back up</button>
+  <button class="ghost sm" id="btnMenu" style="font-size:18px;padding:6px 12px">☰</button>
 </header>
 <main class="wrap" id="view"></main>
 <nav class="tabs"><div class="inner" id="tabbar"></div></nav>
+<div class="menu" id="menu"><div class="panel" id="menuPanel"></div></div>
 <div class="toast" id="toast"></div>
 
 <script>
@@ -132,6 +151,14 @@ const fmt=(n,d=1)=>(n==null||isNaN(n))?'—':(+n).toFixed(d).replace(/\.0$/,'');
 const daysBetween=(a,b)=>Math.abs(new Date(a)-new Date(b))/864e5;
 const dshort=iso=>new Date(iso).toLocaleDateString(undefined,{month:'short',day:'numeric'});
 const DOW=['sun','mon','tue','wed','thu','fri','sat'];
+/* date-string arithmetic on YYYY-MM-DD (UTC-anchored, like the rest of the app) */
+const dayKey=iso=>String(iso).slice(0,10);
+function addDays(iso,n){ const d=new Date(dayKey(iso)+'T00:00:00Z'); d.setUTCDate(d.getUTCDate()+n); return d.toISOString().slice(0,10); }
+const dowOf=iso=>DOW[new Date(dayKey(iso)+'T00:00:00Z').getUTCDay()];
+function dlabel(iso){ return new Date(dayKey(iso)+'T00:00:00Z').toLocaleDateString(undefined,{weekday:'short',timeZone:'UTC'}).toUpperCase()+' '+dayKey(iso).slice(5); }
+const planForDate=iso=>S.program.days.find(d=>d.dow===dowOf(iso))||null;
+const sessOn=(iso,kind)=>S.sessions.find(s=>s.kind===kind && dayKey(s.date)===dayKey(iso));
+function dayFlareOn(iso){ const c=sessOn(iso,'check'); return c ? (c.symptoms||[]).some(x=>x.severity>=2) : false; }
 const val=id=>{ const e=document.getElementById(id); return e? e.value : ''; };
 const num=id=>{ const v=parseFloat(val(id)); return isNaN(v)? null : v; };
 
@@ -316,7 +343,32 @@ function derive(){
     const n=flares.filter(f=>f.area===a).length;
     flags.push({sev:n>=2?'act':'watch', t:a+' flare ×'+n+' in 14 days — impact gated, exercises auto-swapped'});
   }
-  return {per, run7, run28, flares, flareAreas, bw, ladder:L, flags};
+  /* missed-pattern: scheduled training days in the past 14d (>= install) with no
+     matching session. A single miss is noise; a PATTERN is a planning signal —
+     flag it toward re-planning, never toward cramming (tissue-first). */
+  const adher=adherenceWindow(14);
+  if(adher.runsMissed>=2)
+    flags.push({sev:'watch', t:'Missed '+adher.runsMissed+' of your last '+adher.runsPlanned+' runs — aerobic base isn’t building. Export a brief to adjust the schedule.'});
+  else if(adher.gymMissed>=2)
+    flags.push({sev:'watch', t:'Missed '+adher.gymMissed+' of your last '+adher.gymPlanned+' gym sessions — consider re-planning around your week.'});
+  return {per, run7, run28, flares, flareAreas, bw, ladder:L, flags, adherence:adher};
+}
+
+/* Adherence over the past `days` days (training days only, >= install date). */
+function adherenceWindow(days){
+  const t=today(), created=dayKey((S.meta&&S.meta.created_at)||t);
+  let planned=0, logged=0, runsPlanned=0, runsMissed=0, gymPlanned=0, gymMissed=0;
+  for(let i=days;i>=0;i--){
+    const d=addDays(t,-i);
+    if(d>t || d<created) continue;
+    const plan=planForDate(d); if(!plan) continue;   // rest day
+    planned++;
+    const hit=!!sessOn(d,plan.kind);
+    if(hit) logged++;
+    if(plan.kind==='run'){ runsPlanned++; if(!hit) runsMissed++; }
+    if(plan.kind==='gym'){ gymPlanned++; if(!hit) gymMissed++; }
+  }
+  return {planned, logged, runsPlanned, runsMissed, gymPlanned, gymMissed};
 }
 
 function progressOf(g){
@@ -649,7 +701,8 @@ async function doRestore(file){
 const backupAgeDays=()=> S.meta.last_backup ? daysBetween(new Date(), S.meta.last_backup) : (S.sessions.length?999:0);
 
 /* ================= UI ================= */
-const App={tab:'goals', draft:null, readiness:{sleep:3,stress:3,soreness:3,energy:3}, check:null, briefOut:null};
+const App={tab:'goals', draft:null, readiness:{sleep:3,stress:3,soreness:3,energy:3}, check:null, briefOut:null,
+  cal:{anchor:null, open:null}, backdate:null, goalEdit:null, menuOpen:false};
 function toast(m){ const t=document.getElementById('toast'); t.textContent=m; t.classList.add('show');
   clearTimeout(t._t); t._t=setTimeout(()=>t.classList.remove('show'),1900); }
 const esc=s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
@@ -661,17 +714,27 @@ function render(){
   const D=derive();
   document.getElementById('hdrSub').textContent = setup? 'first-run setup'
     : 'v'+S.program.version+' · phase '+S.program.phase+' · wk '+S.program.block_week;
-  document.getElementById('btnBackupTop').style.display = setup? 'none':'';
+  document.getElementById('btnMenu').style.display = setup? 'none':'';
   const v=document.getElementById('view'); v.className='wrap fade';
 
-  if(setup){ v.innerHTML=vSetup(); document.getElementById('tabbar').innerHTML=''; wireSetup(); return; }
+  if(setup){ v.innerHTML=vSetup(); document.getElementById('tabbar').innerHTML=''; renderMenu(); wireSetup(); return; }
 
   v.innerHTML = App.tab==='goals'? vGoals(D) : App.tab==='today'? vToday(D)
-              : App.tab==='check'? vCheck(D) : App.tab==='coach'? vCoach(D) : vData(D);
+              : App.tab==='cal'? vCal(D) : App.tab==='check'? vCheck(D)
+              : App.tab==='coach'? vCoach(D) : vData(D);
   document.getElementById('tabbar').innerHTML=
-    [['goals','◎','Goals'],['today','◉','Today'],['check','♡','Check'],['coach','✦','Coach'],['data','◇','Data']]
+    [['goals','◎','Goals'],['today','◉','Today'],['cal','▦','Cal'],['check','♡','Check']]
     .map(t=>'<button data-tab="'+t[0]+'" class="'+(App.tab===t[0]?'on':'')+'"><span class="ico">'+t[1]+'</span>'+t[2]+'</button>').join('');
+  renderMenu();
   wire(D);
+}
+function renderMenu(){
+  const m=document.getElementById('menu');
+  m.classList.toggle('open', !!App.menuOpen);
+  document.getElementById('menuPanel').innerHTML=
+    '<button data-menu="coach"'+(App.tab==='coach'?' style="color:var(--accent)"':'')+'><span class="ico">✦</span>Coach</button>'+
+    '<button data-menu="data"'+(App.tab==='data'?' style="color:var(--accent)"':'')+'><span class="ico">◇</span>Data</button>'+
+    '<button data-menu="backup"><span class="ico">⇧</span>Back up now</button>';
 }
 
 /* ---------- FIRST-RUN SETUP (nothing personal ships in the code) ---------- */
@@ -751,22 +814,43 @@ function wireSetup(){
   };
 }
 
-function nudgeHTML(){
+function nudgeHTML(){ return checkNudgeHTML()+backupNudgeHTML(); }
+function backupNudgeHTML(){
   const age=backupAgeDays();
   if(!S.sessions.length || age<7) return '';
   return '<div class="nudge"><div>⚠ <b>'+(age>900?'Never backed up':Math.round(age)+' days')+'</b> since your last backup.</div>'+
     '<button class="sm" id="btnNudge" style="background:var(--warn);color:#1c0d00;border:none">Back up</button></div>';
+}
+/* You owe yesterday's morning check — the highest-leverage input in the app. */
+function checkNudgeHTML(){
+  const y=addDays(today(),-1);
+  const created=dayKey((S.meta&&S.meta.created_at)||today());
+  if(y<created) return '';
+  const plan=planForDate(y); if(!plan) return '';        // yesterday was a rest day
+  if(sessOn(y,'check')) return '';                        // already checked in
+  return '<div class="nudge" style="background:#0a1720;border-color:#123243;color:var(--accent)">'+
+    '<div>♥ Morning check for <b>'+dlabel(y)+'</b> ('+esc(plan.kind==='run'?'run':'gym')+') is still open.</div>'+
+    '<button class="sm" id="btnCheckNudge" style="background:var(--accent);color:#03121c;border:none">Check in</button></div>';
 }
 
 function vGoals(D){
   const bars=S.goals.map(g=>{
     const p=progressOf(g);
     const cur = g.id==='g3' && D.bw ? D.bw : g.current;
+    const editing = App.goalEdit===g.id;
+    const canLog = !g.qualitative && g.id!=='g3';        // bodyweight comes from checks
+    const updRow = editing
+      ? '<div class="row" style="margin-top:9px;gap:6px">'+
+          '<input type="number" inputmode="decimal" step="0.1" id="goalVal" placeholder="latest '+esc(g.unit||'value')+'" style="flex:1">'+
+          '<button class="sm primary" id="goalSave">Save</button>'+
+          '<button class="sm ghost" id="goalCancel">✕</button></div>'
+      : (canLog? '<button class="sm ghost" data-goaledit="'+g.id+'" style="margin-top:9px">＋ log a result</button>' : '');
     return '<div class="goal"><div class="top">'+
       '<div class="nm">'+esc(g.icon||'')+' '+esc(g.name||'')+(g.gate?' <span class="pill warn">gate</span>':'')+'</div>'+
       '<div class="val">'+(cur==null?'—':fmt(cur)+' '+esc(g.unit||''))+(g.target!=null?' <span class="dim">/ '+esc(g.target)+' '+esc(g.unit||'')+'</span>':'')+'</div></div>'+
       (p!=null?'<div class="bar '+(g.gate?'gate':'')+'"><i style="width:'+Math.round(p*100)+'%"></i></div>':'')+
-      '<div class="hint" style="margin-top:7px">'+esc(g.note||'')+(p!=null?' · <b>'+Math.round(p*100)+'%</b>':'')+'</div></div>';
+      '<div class="hint" style="margin-top:7px">'+esc(g.note||'')+(p!=null?' · <b>'+Math.round(p*100)+'%</b>':(canLog&&cur==null?' · <span class="dim">no result logged yet</span>':''))+'</div>'+
+      updRow+'</div>';
   }).join('');
   const flags = D.flags.length
     ? '<div class="card"><h3>Flags</h3><div class="col">'+D.flags.map(f=>
@@ -928,11 +1012,171 @@ function vData(D){
   '</div>';
 }
 
+/* ================= CALENDAR (rolling 14-day agenda) ================= */
+function vCal(D){
+  if(!App.cal.anchor) App.cal.anchor=today();
+  const t=today(), start=addDays(App.cal.anchor,-7);
+  const dates=Array.from({length:14},(_,i)=>addDays(start,i));
+  const a=D.adherence;   // already computed over 14d in derive()
+  const rows=dates.map(d=>calRow(d,D)+(d===t?'<div class="calweeklbl">Today</div>':'')).join('');
+  return '<div class="col">'+nudgeHTML()+
+    '<div class="card"><h3>Calendar</h3>'+
+      '<div class="hint">'+a.logged+'/'+a.planned+' sessions logged, last 14 days'+
+      (D.flares.length?' · <span style="color:var(--bad)">'+D.flares.length+' flare'+(D.flares.length>1?'s':'')+'</span>':'')+'</div></div>'+
+    '<div class="row" style="justify-content:space-between;align-items:center">'+
+      '<button class="ghost sm" id="calPrev">‹ prev</button>'+
+      '<button class="ghost sm" id="calJump">'+dshort(start)+' – '+dshort(addDays(start,13))+'</button>'+
+      '<button class="ghost sm" id="calNext">next ›</button></div>'+
+    '<div class="card" style="padding:2px 10px">'+rows+'</div>'+
+  '</div>';
+}
+function calRow(d,D){
+  const t=today(), plan=planForDate(d);
+  const created=dayKey((S.meta&&S.meta.created_at)||t);
+  const pre=d<created, isToday=d===t, isFuture=d>t;
+  const label=plan?plan.label:'Rest';
+  const logged = plan && !isFuture ? sessOn(d,plan.kind) : null;
+  const chk=sessOn(d,'check'), flare=dayFlareOn(d);
+  let pill='';
+  if(pre){} else if(isToday) pill='<span class="pill" style="border-color:var(--accent);color:var(--accent)">● today</span>';
+  else if(isFuture) pill = plan?'<span class="pill dim">planned</span>':'';
+  else if(plan) pill = logged?'<span class="pill good">✓ logged</span>':'<span class="pill bad">✕ missed</span>';
+  const glyph = (!plan||isFuture||pre) ? ''
+    : chk ? '<span class="glyph '+(flare?'flare':'clean')+'">'+(flare?'♥':'♡')+'</span>'
+          : '<span class="glyph open">♡</span>';
+  const open=App.cal.open===d;
+  return '<div class="calrow'+(isToday?' istoday':'')+(pre?' pre':'')+'">'+
+    '<div class="hd" data-toggle="'+d+'"><span><span class="date">'+dlabel(d)+'</span><span class="lbl">'+esc(label)+'</span></span>'+
+      '<span>'+pill+glyph+'</span></div>'+
+    (open?'<div class="detail">'+calDetail(d,plan,D)+'</div>':'')+
+  '</div>';
+}
+function calDetail(d,plan,D){
+  const t=today(), created=dayKey((S.meta&&S.meta.created_at)||t);
+  if(!plan) return '<div class="hint">Recovery day. Nothing to log.</div>';
+  if(d<created) return '<div class="hint">Before this coach existed on your device.</div>';
+  if(d>t){                                   // future — preview only
+    if(plan.kind==='gym') return '<div class="hint">'+esc(plan.slots.map(s=>ex(s.exercise_id).name).join(' · '))+'</div>';
+    const p=planRun(plan,D);
+    return '<div class="callout"><b>'+esc(p.headline)+'</b><div class="muted" style="margin-top:4px">'+esc(p.detail)+'</div></div>'+
+      '<div class="hint" style="margin-top:6px">Preview — computed from today’s state.</div>';
+  }
+  const s=sessOn(d,plan.kind);
+  if(s){                                      // logged — read-only summary
+    const late = s.backdated || (s.created_at && daysBetween(s.created_at,s.date)>0.9);
+    const tag = late?'<span class="tag"> · logged late</span>':'';
+    if(plan.kind==='gym'){
+      const byEx={}; for(const st of s.sets){ (byEx[st.exercise_id]=byEx[st.exercise_id]||[]).push(st); }
+      return Object.keys(byEx).map(id=>'<div class="hint"><b>'+esc(ex(id)?ex(id).name:id)+'</b> '+
+        byEx[id].map(x=>x.actual.load_kg+'×'+x.actual.reps+(x.actual.rpe?'@'+x.actual.rpe:'')).join(' · ')+'</div>').join('')+
+        '<div class="hint" style="margin-top:6px">Readiness '+fmt(readinessScore(s.readiness))+'/5'+(s.note?' · “'+esc(s.note)+'”':'')+tag+'</div>';
+    }
+    return '<div class="hint">'+s.duration_min+' min'+(s.distance_km?', '+s.distance_km+' km':'')+(s.load_kg?', '+s.load_kg+' kg':'')+
+      ', RPE '+(s.rpe||'—')+(s.note?' · “'+esc(s.note)+'”':'')+tag+'</div>';
+  }
+  if(App.backdate && App.backdate.date===d)   // mid back-date entry
+    return plan.kind==='gym'? vBackdateGym(plan,d) : vBackdateRun(plan,d);
+  const planTxt = plan.kind==='gym'? plan.slots.map(sl=>ex(sl.exercise_id).name).join(' · ') : plan.label;
+  return '<div class="hint">Planned: '+esc(planTxt)+'</div>'+
+    '<div class="hint" style="margin:6px 0">Did you train this and forget to log it?</div>'+
+    '<button class="sm" data-backdate="'+d+'">Log it now (back-dated)</button>';
+}
+function bdBanner(iso){ return '<div class="callout warn" style="margin-bottom:8px">⚠ Back-dated log for <b>'+dlabel(iso)+'</b> (today is '+dlabel(today())+'). No suggested loads — enter what you actually did.</div>'; }
+function vBackdateGym(day,iso){
+  return bdBanner(iso)+day.slots.map(sl=>{
+    const e=ex(sl.exercise_id);
+    const rows=Array.from({length:sl.sets},(_,i)=>
+      '<div class="setrow"><div class="idx">'+(i+1)+'</div>'+
+      '<div><small>'+(sl.isometric?'sec':sl.carry?'m':'kg')+'</small><input type="number" inputmode="decimal" data-bd="'+sl.id+'" data-i="'+i+'" data-k="load"></div>'+
+      '<div><small>'+(sl.isometric?'—':'reps')+'</small><input type="number" inputmode="numeric" data-bd="'+sl.id+'" data-i="'+i+'" data-k="reps"'+(sl.isometric?' disabled':'')+'></div>'+
+      '<div><small>RPE</small><input type="number" inputmode="decimal" step="0.5" data-bd="'+sl.id+'" data-i="'+i+'" data-k="rpe"></div></div>').join('');
+    return '<div style="margin-top:8px"><div class="exname" style="font-size:13px">'+esc(e.name)+' <span class="tag">'+sl.sets+'×'+(sl.reps[0]===sl.reps[1]?sl.reps[0]:sl.reps.join('-'))+(sl.rpe?' @'+sl.rpe:'')+'</span></div>'+rows+'</div>';
+  }).join('')+
+  '<div style="margin-top:8px"><label class="f">Note</label><textarea id="bdNote"></textarea></div>'+
+  '<div class="row" style="margin-top:8px"><button class="sm primary" id="bdSave">Save back-dated log</button><button class="sm ghost" id="bdCancel">Cancel</button></div>';
+}
+function vBackdateRun(day,iso){
+  return bdBanner(iso)+
+    '<div class="grid g2">'+
+      '<div><label class="f">Duration (min)</label><input type="number" inputmode="numeric" id="bdDur"></div>'+
+      '<div><label class="f">Distance (km)</label><input type="number" inputmode="decimal" step="0.1" id="bdDist"></div>'+
+      '<div><label class="f">RPE</label><input type="number" inputmode="decimal" step="0.5" id="bdRpe"></div>'+
+      (day.modality==='ruck'?'<div><label class="f">Load (kg)</label><input type="number" inputmode="decimal" step="0.5" id="bdLoad"></div>':'<div></div>')+
+    '</div>'+
+    '<div style="margin-top:8px"><label class="f">Note</label><textarea id="bdNote"></textarea></div>'+
+    '<div class="row" style="margin-top:8px"><button class="sm primary" id="bdSave">Save back-dated log</button><button class="sm ghost" id="bdCancel">Cancel</button></div>';
+}
+async function saveBackdate(){
+  const iso=App.backdate.date, day=planForDate(iso);
+  const dateISO=iso+'T12:00:00.000Z';
+  if(day.kind==='gym'){
+    const by={}; document.querySelectorAll('[data-bd]').forEach(inp=>{
+      const {bd,i,k}=inp.dataset; ((by[bd]=by[bd]||{})[i]=by[bd][i]||{})[k]=inp.value; });
+    const sets=[];
+    for(const sl of day.slots){ const g=by[sl.id]||{};
+      Object.keys(g).forEach(i=>{ const a=g[i];
+        if((a.load==null||a.load==='')&&(a.reps==null||a.reps==='')) return;
+        sets.push({ id:uid('set'), exercise_id:sl.exercise_id, set_index:+i+1,
+          prescribed:{ load_kg:null, reps:sl.reps[1], rpe:sl.rpe!=null?sl.rpe:null },
+          actual:{ load_kg:a.load?+a.load:0, reps:a.reps?+a.reps:0, rpe:a.rpe?+a.rpe:null } }); });
+    }
+    if(!sets.length) return toast('Enter at least one set');
+    S.sessions.push({ id:uid('s'), kind:'gym', date:dateISO, day_id:day.id, day_label:day.label,
+      program_id:S.program.id, program_version:S.program.version, readiness:null, sets,
+      note:val('bdNote'), backdated:true, created_at:nowISO() });
+  } else {
+    const dur=num('bdDur'); if(!dur) return toast('Enter the duration');
+    const dist=num('bdDist');
+    const s={ id:uid('s'), kind:'run', date:dateISO, day_id:day.id, day_label:day.label,
+      program_id:S.program.id, program_version:S.program.version, modality:day.modality,
+      duration_min:dur, distance_km:dist, rpe:num('bdRpe'),
+      load_kg: day.modality==='ruck'? num('bdLoad'):null, note:val('bdNote'), backdated:true, created_at:nowISO() };
+    if(dist&&dur) s.speed_kmh=+((dist/(dur/60)).toFixed(2));
+    S.sessions.push(s);
+  }
+  const d=App.backdate.date; App.backdate=null; App.cal.open=d;
+  await save(); render(); toast('Back-dated log saved for '+dlabel(d)+' ✓');
+}
+
 /* ================= WIRE ================= */
 function wire(D){
   document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>{ App.tab=b.dataset.tab; App.briefOut=null; render(); });
-  document.getElementById('btnBackupTop').onclick=doBackup;
   const nb=document.getElementById('btnNudge'); if(nb) nb.onclick=doBackup;
+
+  // hamburger menu (Coach / Data / Back up)
+  document.getElementById('btnMenu').onclick=()=>{ App.menuOpen=!App.menuOpen; renderMenu(); };
+  const menu=document.getElementById('menu');
+  menu.onclick=e=>{ if(e.target===menu){ App.menuOpen=false; renderMenu(); } };
+  document.querySelectorAll('[data-menu]').forEach(b=>b.onclick=()=>{
+    const a=b.dataset.menu; App.menuOpen=false;
+    if(a==='backup'){ renderMenu(); doBackup(); }
+    else { App.tab=a; App.briefOut=null; render(); }
+  });
+
+  // check-owed nudge
+  const cn=document.getElementById('btnCheckNudge'); if(cn) cn.onclick=()=>{ App.tab='check'; render(); };
+
+  // goal "log a result"
+  document.querySelectorAll('[data-goaledit]').forEach(b=>b.onclick=()=>{ App.goalEdit=b.dataset.goaledit; render();
+    const gv=document.getElementById('goalVal'); if(gv) gv.focus(); });
+  const gs=document.getElementById('goalSave');
+  if(gs) gs.onclick=async()=>{
+    const g=goal(App.goalEdit), v=num('goalVal');
+    if(v==null) return toast('Enter a number');
+    if(g.baseline==null) g.baseline=v;   // first result becomes the starting point
+    g.current=v; App.goalEdit=null; await save(); render(); toast(g.name+' updated ✓');
+  };
+  const gc=document.getElementById('goalCancel'); if(gc) gc.onclick=()=>{ App.goalEdit=null; render(); };
+
+  // calendar
+  document.querySelectorAll('[data-toggle]').forEach(el=>el.onclick=()=>{
+    const d=el.dataset.toggle; App.cal.open = App.cal.open===d? null : d; App.backdate=null; render(); });
+  const cp=document.getElementById('calPrev'); if(cp) cp.onclick=()=>{ App.cal.anchor=addDays(App.cal.anchor||today(),-7); App.cal.open=null; render(); };
+  const cx=document.getElementById('calNext'); if(cx) cx.onclick=()=>{ App.cal.anchor=addDays(App.cal.anchor||today(),7); App.cal.open=null; render(); };
+  const cj=document.getElementById('calJump'); if(cj) cj.onclick=()=>{ App.cal.anchor=today(); App.cal.open=null; render(); };
+  document.querySelectorAll('[data-backdate]').forEach(b=>b.onclick=()=>{ App.backdate={date:b.dataset.backdate}; render(); });
+  const bs=document.getElementById('bdSave'); if(bs) bs.onclick=saveBackdate;
+  const bc=document.getElementById('bdCancel'); if(bc) bc.onclick=()=>{ App.backdate=null; render(); };
 
   document.querySelectorAll('[data-r]').forEach(seg=>seg.querySelectorAll('button').forEach(b=>b.onclick=()=>{
     App.readiness[seg.dataset.r]=+b.dataset.v; App.draft=null; render(); }));
