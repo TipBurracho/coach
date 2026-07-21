@@ -351,7 +351,27 @@ function derive(){
     flags.push({sev:'watch', t:'Missed '+adher.runsMissed+' of your last '+adher.runsPlanned+' runs — aerobic base isn’t building. Export a brief to adjust the schedule.'});
   else if(adher.gymMissed>=2)
     flags.push({sev:'watch', t:'Missed '+adher.gymMissed+' of your last '+adher.gymPlanned+' gym sessions — consider re-planning around your week.'});
-  return {per, run7, run28, flares, flareAreas, bw, ladder:L, flags, adherence:adher};
+
+  /* goal stats — filled from the LOG, not authored (matches the whole app).
+     g4 = the ladder's sustainable jog bout · g1 = fastest logged ≥3km run ·
+     g2 = best Cooper-test distance · g3 = latest bodyweight. baseline is the
+     earliest measurement, current the best, so the bar shows real progress. */
+  const gs={};
+  const speedRuns=sess.filter(s=>s.kind==='run'&&s.speed_kmh&&s.distance_km>=3).sort((a,b)=>a.date.localeCompare(b.date));
+  if(speedRuns.length) gs.g1={ base:speedRuns[0].speed_kmh, cur:Math.max(...speedRuns.map(s=>s.speed_kmh)) };
+  const coopers=sess.filter(s=>s.kind==='run'&&s.modality==='test_cooper'&&s.distance_km).sort((a,b)=>a.date.localeCompare(b.date));
+  if(coopers.length){ const m=coopers.map(s=>Math.round(s.distance_km*1000)); gs.g2={ base:m[0], cur:Math.max(...m) }; }
+
+  return {per, run7, run28, flares, flareAreas, bw, ladder:L, flags, adherence:adher, gs};
+}
+
+/* effective goal value, derived from the log where possible */
+function goalStat(g,D){
+  if(g.id==='g3') return {cur:(D.bw!=null?D.bw:g.current), base:g.baseline, target:g.target};
+  if(g.id==='g4') return {cur:(D.ladder?+(+D.ladder.jog).toFixed(1):g.current), base:g.baseline, target:g.target};
+  if(g.id==='g1'&&D.gs.g1) return {cur:D.gs.g1.cur, base:Math.min(D.gs.g1.base, g.target), target:g.target};
+  if(g.id==='g2'&&D.gs.g2) return {cur:D.gs.g2.cur, base:Math.min(D.gs.g2.base, g.target), target:g.target};
+  return {cur:g.current, base:g.baseline, target:g.target};
 }
 
 /* Adherence over the past `days` days (training days only, >= install date). */
@@ -371,9 +391,10 @@ function adherenceWindow(days){
   return {planned, logged, runsPlanned, runsMissed, gymPlanned, gymMissed};
 }
 
-function progressOf(g){
-  if(g.qualitative||g.current==null||g.baseline==null||g.target==null||g.target===g.baseline) return null;
-  return clamp((g.current-g.baseline)/(g.target-g.baseline),0,1);
+function progressOf(g,D){
+  const s = D? goalStat(g,D) : {cur:g.current, base:g.baseline, target:g.target};
+  if(g.qualitative||s.cur==null||s.base==null||s.target==null||s.target===s.base) return null;
+  return clamp((s.cur-s.base)/(s.target-s.base),0,1);
 }
 
 /* ================= FAST LOOP (§5.1–5.5) ================= */
@@ -466,8 +487,8 @@ function buildBrief(userNote){
   L.push('');
   L.push('## Goals & progress');
   for(const g of S.goals){
-    const p=progressOf(g);
-    const cur = g.id==='g3' && D.bw ? D.bw : g.current;
+    const p=progressOf(g,D);
+    const cur = goalStat(g,D).cur;
     L.push('- **'+g.name+'**'+(g.gate?' _(GATE)_':'')+': '+(cur==null?'not set':fmt(cur)+' '+g.unit)+
       ' → target '+(g.target==null?'—':g.target+' '+g.unit)+(p!=null?' ('+Math.round(p*100)+'%)':'')+
       (g.qualitative&&g.note?' — '+g.note:''));
@@ -702,7 +723,7 @@ const backupAgeDays=()=> S.meta.last_backup ? daysBetween(new Date(), S.meta.las
 
 /* ================= UI ================= */
 const App={tab:'goals', draft:null, readiness:{sleep:3,stress:3,soreness:3,energy:3}, check:null, briefOut:null,
-  cal:{anchor:null, open:null}, backdate:null, goalEdit:null, menuOpen:false};
+  cal:{anchor:null, open:null}, backdate:null, testEdit:null, menuOpen:false};
 function toast(m){ const t=document.getElementById('toast'); t.textContent=m; t.classList.add('show');
   clearTimeout(t._t); t._t=setTimeout(()=>t.classList.remove('show'),1900); }
 const esc=s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
@@ -731,10 +752,17 @@ function render(){
 function renderMenu(){
   const m=document.getElementById('menu');
   m.classList.toggle('open', !!App.menuOpen);
-  document.getElementById('menuPanel').innerHTML=
+  const panel=document.getElementById('menuPanel');
+  panel.innerHTML=
     '<button data-menu="coach"'+(App.tab==='coach'?' style="color:var(--accent)"':'')+'><span class="ico">✦</span>Coach</button>'+
     '<button data-menu="data"'+(App.tab==='data'?' style="color:var(--accent)"':'')+'><span class="ico">◇</span>Data</button>'+
     '<button data-menu="backup"><span class="ico">⇧</span>Back up now</button>';
+  // rebuilt each toggle -> must (re)wire the items here, not in wire()
+  panel.querySelectorAll('[data-menu]').forEach(b=>b.onclick=()=>{
+    const a=b.dataset.menu; App.menuOpen=false;
+    if(a==='backup'){ renderMenu(); doBackup(); }
+    else { App.tab=a; App.briefOut=null; render(); }
+  });
 }
 
 /* ---------- FIRST-RUN SETUP (nothing personal ships in the code) ---------- */
@@ -789,7 +817,13 @@ function wireSetup(){
     S.profile.note=val('sNote').trim();
     S.profile.constraints=val('sCon').trim();
 
-    const g4=goal('g4'); g4.baseline=jog; g4.current=jog; g4.target=num('sJogTgt')||30;
+    /* ladder starts at ~half your symptom-line tolerance (safe bouts), ~20 min jogging */
+    const j=clamp(round(jog/2,0.5),2,8);
+    S.meta.ladder={ jog:j, walk:2, rounds:clamp(Math.round(20/j),3,6) };
+
+    /* jog-gate goal tracks the ladder bout: baseline = where the ladder STARTS
+       (not your flare threshold), so progress climbs cleanly 0->100% toward target */
+    const g4=goal('g4'); g4.baseline=j; g4.current=j; g4.target=num('sJogTgt')||30;
     const g3=goal('g3'); g3.baseline=num('sBwNow'); g3.current=num('sBwNow'); g3.target=num('sBwTgt');
     goal('g1').target=num('sSpd')||12;
     goal('g2').target=num('sCoop')||2400;
@@ -804,10 +838,6 @@ function wireSetup(){
       if(kg&&reps&&rpe){ const e=e1rmOf(kg,reps,rpe); if(e>0) seeds[b[0]]=+e.toFixed(1); }
     }
     S.meta.seed_e1rm=seeds;
-
-    /* ladder derived from the gate: bouts at ~half your tolerance, ~20 min of jogging */
-    const j=clamp(round(jog/2,0.5),2,8);
-    S.meta.ladder={ jog:j, walk:2, rounds:clamp(Math.round(20/j),3,6) };
 
     S.meta.setup_done=true;
     await save(); App.tab='goals'; render(); toast('Coach is ready ✓');
@@ -833,24 +863,17 @@ function checkNudgeHTML(){
     '<button class="sm" id="btnCheckNudge" style="background:var(--accent);color:#03121c;border:none">Check in</button></div>';
 }
 
+const GSRC={g1:'from your fastest logged run', g2:'from your Cooper test', g3:'from morning check-ins', g4:'from the run/walk ladder'};
 function vGoals(D){
   const bars=S.goals.map(g=>{
-    const p=progressOf(g);
-    const cur = g.id==='g3' && D.bw ? D.bw : g.current;
-    const editing = App.goalEdit===g.id;
-    const canLog = !g.qualitative && g.id!=='g3';        // bodyweight comes from checks
-    const updRow = editing
-      ? '<div class="row" style="margin-top:9px;gap:6px">'+
-          '<input type="number" inputmode="decimal" step="0.1" id="goalVal" placeholder="latest '+esc(g.unit||'value')+'" style="flex:1">'+
-          '<button class="sm primary" id="goalSave">Save</button>'+
-          '<button class="sm ghost" id="goalCancel">✕</button></div>'
-      : (canLog? '<button class="sm ghost" data-goaledit="'+g.id+'" style="margin-top:9px">＋ log a result</button>' : '');
+    const st=goalStat(g,D), p=progressOf(g,D), cur=st.cur;
+    const src = (!g.qualitative && GSRC[g.id]) ? '<span class="dim"> · '+GSRC[g.id]+'</span>' : '';
     return '<div class="goal"><div class="top">'+
       '<div class="nm">'+esc(g.icon||'')+' '+esc(g.name||'')+(g.gate?' <span class="pill warn">gate</span>':'')+'</div>'+
       '<div class="val">'+(cur==null?'—':fmt(cur)+' '+esc(g.unit||''))+(g.target!=null?' <span class="dim">/ '+esc(g.target)+' '+esc(g.unit||'')+'</span>':'')+'</div></div>'+
       (p!=null?'<div class="bar '+(g.gate?'gate':'')+'"><i style="width:'+Math.round(p*100)+'%"></i></div>':'')+
-      '<div class="hint" style="margin-top:7px">'+esc(g.note||'')+(p!=null?' · <b>'+Math.round(p*100)+'%</b>':(canLog&&cur==null?' · <span class="dim">no result logged yet</span>':''))+'</div>'+
-      updRow+'</div>';
+      '<div class="hint" style="margin-top:7px">'+esc(g.note||'')+(p!=null?' · <b>'+Math.round(p*100)+'%</b>'+src:(!g.qualitative&&cur==null?src.replace('· ','· awaiting result '):''))+'</div>'+
+    '</div>';
   }).join('');
   const flags = D.flags.length
     ? '<div class="card"><h3>Flags</h3><div class="col">'+D.flags.map(f=>
@@ -858,7 +881,8 @@ function vGoals(D){
     : '<div class="card"><div class="callout good">No flags. Progression is clear to run.</div></div>';
   return '<div class="col">'+nudgeHTML()+
     '<div class="card"><h3>Goals — everything serves these</h3><div class="col">'+bars+'</div>'+
-    '<div class="divider"></div><div class="hint">The <b>gate</b> governs the plan: impact only progresses when the tissue earns it. Protecting it <i>is</i> the fastest route to the 5k.</div></div>'+
+    '<div class="divider"></div><div class="hint">Bars fill from your logged training — the jog gate from the ladder, the 5k from your fastest run, bodyweight from check-ins. The two field tests below feed the rest.</div></div>'+
+    vTests(D)+
     flags+
     '<div class="card"><h3>This week</h3><div class="grid g3">'+
       '<div class="goal"><div class="hint">Run 7d</div><div class="nm">'+Math.round(D.run7)+'<span class="dim" style="font-size:11px"> min</span></div></div>'+
@@ -866,6 +890,41 @@ function vGoals(D){
       '<div class="goal"><div class="hint">Jog bout</div><div class="nm">'+fmt(D.ladder.jog)+'<span class="dim" style="font-size:11px"> min</span></div></div>'+
     '</div><div class="hint" style="margin-top:10px">MON gym · TUE run · WED gym · FRI ruck · SUN run — Thu &amp; Sat rest</div></div>'+
   '</div>';
+}
+
+/* Programmed field tests — a Cooper (12-min) and a 5k time-trial, due monthly.
+   Logging one writes a real run session; derive() fills the goal from it. */
+const TESTS=[
+  {id:'test_5k',     modality:'test_5k',     icon:'🏃', name:'5k time-trial',    goal:'g1', ask:'Your 5k time (min)',      every:28},
+  {id:'test_cooper', modality:'test_cooper', icon:'⏱️', name:'Cooper test (12 min)', goal:'g2', ask:'Distance in 12 min (m)', every:28}
+];
+const lastTest=m=>S.sessions.filter(s=>s.kind==='run'&&s.modality===m).sort((a,b)=>b.date.localeCompare(a.date))[0];
+function vTests(D){
+  const rows=TESTS.map(t=>{
+    const last=lastTest(t.modality), ageD=last?daysBetween(new Date(),last.date):null, due=!last||ageD>=t.every;
+    const editing=App.testEdit===t.id;
+    let res='never done';
+    if(last) res=(t.id==='test_5k'?fmt(last.duration_min)+' min ('+fmt(last.speed_kmh)+' km/h)':Math.round(last.distance_km*1000)+' m')+' · '+Math.round(ageD)+'d ago';
+    const editRow=editing
+      ? '<div class="row" style="margin-top:8px;gap:6px"><input type="number" inputmode="decimal" step="0.1" id="testVal" placeholder="'+esc(t.ask)+'" style="flex:1">'+
+        '<button class="sm primary" id="testSave">Save</button><button class="sm ghost" id="testCancel">✕</button></div>'
+      : '<button class="sm'+(due?' primary':' ghost')+'" data-testedit="'+t.id+'" style="margin-top:8px">'+(due?'Log result':'Update')+'</button>';
+    return '<div class="goal"><div class="top"><div class="nm">'+t.icon+' '+esc(t.name)+(due?' <span class="pill warn">due</span>':'')+'</div>'+
+      '<div class="val dim">'+esc(res)+'</div></div>'+
+      '<div class="hint" style="margin-top:5px">Feeds “'+esc(goal(t.goal).name)+'”</div>'+editRow+'</div>';
+  }).join('');
+  return '<div class="card"><h3>Field tests — run these ~monthly</h3><div class="col">'+rows+'</div>'+
+    '<div class="hint" style="margin-top:8px">These are your programmed tests. Logging one moves the goal bar above.</div></div>';
+}
+async function logTest(id){
+  const t=TESTS.find(x=>x.id===id); if(!t) return; const v=num('testVal');
+  if(v==null||v<=0) return toast('Enter a number');
+  const s = id==='test_5k'
+    ? { id:uid('s'), kind:'run', date:nowISO(), modality:'test_5k', day_label:'5k time-trial',
+        duration_min:v, distance_km:5, speed_kmh:+(5/(v/60)).toFixed(2), note:'5k time-trial', created_at:nowISO() }
+    : { id:uid('s'), kind:'run', date:nowISO(), modality:'test_cooper', day_label:'Cooper test',
+        duration_min:12, distance_km:+(v/1000).toFixed(3), note:'Cooper test', created_at:nowISO() };
+  S.sessions.push(s); App.testEdit=null; await save(); render(); toast(t.name+' logged ✓');
 }
 
 function vToday(D){
@@ -1143,30 +1202,20 @@ function wire(D){
   document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>{ App.tab=b.dataset.tab; App.briefOut=null; render(); });
   const nb=document.getElementById('btnNudge'); if(nb) nb.onclick=doBackup;
 
-  // hamburger menu (Coach / Data / Back up)
+  // hamburger menu (Coach / Data / Back up). Panel items are wired in renderMenu()
+  // because the panel HTML is rebuilt on every toggle.
   document.getElementById('btnMenu').onclick=()=>{ App.menuOpen=!App.menuOpen; renderMenu(); };
   const menu=document.getElementById('menu');
   menu.onclick=e=>{ if(e.target===menu){ App.menuOpen=false; renderMenu(); } };
-  document.querySelectorAll('[data-menu]').forEach(b=>b.onclick=()=>{
-    const a=b.dataset.menu; App.menuOpen=false;
-    if(a==='backup'){ renderMenu(); doBackup(); }
-    else { App.tab=a; App.briefOut=null; render(); }
-  });
 
   // check-owed nudge
   const cn=document.getElementById('btnCheckNudge'); if(cn) cn.onclick=()=>{ App.tab='check'; render(); };
 
-  // goal "log a result"
-  document.querySelectorAll('[data-goaledit]').forEach(b=>b.onclick=()=>{ App.goalEdit=b.dataset.goaledit; render();
-    const gv=document.getElementById('goalVal'); if(gv) gv.focus(); });
-  const gs=document.getElementById('goalSave');
-  if(gs) gs.onclick=async()=>{
-    const g=goal(App.goalEdit), v=num('goalVal');
-    if(v==null) return toast('Enter a number');
-    if(g.baseline==null) g.baseline=v;   // first result becomes the starting point
-    g.current=v; App.goalEdit=null; await save(); render(); toast(g.name+' updated ✓');
-  };
-  const gc=document.getElementById('goalCancel'); if(gc) gc.onclick=()=>{ App.goalEdit=null; render(); };
+  // field tests -> feed goals
+  document.querySelectorAll('[data-testedit]').forEach(b=>b.onclick=()=>{ App.testEdit=b.dataset.testedit; render();
+    const tv=document.getElementById('testVal'); if(tv) tv.focus(); });
+  const ts=document.getElementById('testSave'); if(ts) ts.onclick=()=>logTest(App.testEdit);
+  const tc=document.getElementById('testCancel'); if(tc) tc.onclick=()=>{ App.testEdit=null; render(); };
 
   // calendar
   document.querySelectorAll('[data-toggle]').forEach(el=>el.onclick=()=>{
