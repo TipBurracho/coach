@@ -78,6 +78,7 @@
   .nudge{background:#1c160a;border:1px solid #3b2f14;color:var(--warn);border-radius:12px;padding:11px 13px;font-size:13px;display:flex;justify-content:space-between;align-items:center;gap:10px}
   .divider{height:1px;background:var(--line);margin:12px 0}
   .pill.dim{color:var(--dim)}
+  .pill.test{color:var(--accent-2);border-color:#2a2350;background:#140f26}
   .calrow{border-bottom:1px solid var(--line)}
   .calrow:last-child{border-bottom:none}
   .calrow .hd{display:flex;justify-content:space-between;align-items:center;padding:11px 4px;cursor:pointer;gap:8px}
@@ -156,7 +157,29 @@ const dayKey=iso=>String(iso).slice(0,10);
 function addDays(iso,n){ const d=new Date(dayKey(iso)+'T00:00:00Z'); d.setUTCDate(d.getUTCDate()+n); return d.toISOString().slice(0,10); }
 const dowOf=iso=>DOW[new Date(dayKey(iso)+'T00:00:00Z').getUTCDay()];
 function dlabel(iso){ return new Date(dayKey(iso)+'T00:00:00Z').toLocaleDateString(undefined,{weekday:'short',timeZone:'UTC'}).toUpperCase()+' '+dayKey(iso).slice(5); }
-const planForDate=iso=>S.program.days.find(d=>d.dow===dowOf(iso))||null;
+/* Programmed field tests, auto every 4 weeks (deload week of each block):
+   Cooper replaces the Tue run, 5k time-trial replaces the Sun run. */
+function testForDate(iso){
+  const start=dayKey((S.meta&&S.meta.program_start)||(S.meta&&S.meta.created_at)||today());
+  if(dayKey(iso)<start) return null;
+  const weekIdx=Math.floor(daysBetween(start,iso)/7);
+  if(weekIdx%4!==3) return null;                    // 4th week of each 4-week block
+  const dow=dowOf(iso);
+  if(dow==='tue') return {id:'test_cooper', modality:'test_cooper', name:'Cooper test'};
+  if(dow==='sun') return {id:'test_5k',     modality:'test_5k',     name:'5k time-trial'};
+  return null;
+}
+function nextTestDate(testId){
+  const t=today();
+  for(let i=0;i<70;i++){ const d=addDays(t,i); const tf=testForDate(d);
+    if(tf && (!testId||tf.id===testId)) return {date:d, test:tf}; }
+  return null;
+}
+function planForDate(iso){
+  const tf=testForDate(iso);
+  if(tf) return {id:'day_'+tf.id, dow:dowOf(iso), kind:'run', modality:tf.modality, label:tf.name, test:tf};
+  return S.program.days.find(d=>d.dow===dowOf(iso))||null;
+}
 const sessOn=(iso,kind)=>S.sessions.find(s=>s.kind===kind && dayKey(s.date)===dayKey(iso));
 function dayFlareOn(iso){ const c=sessOn(iso,'check'); return c ? (c.symptoms||[]).some(x=>x.severity>=2) : false; }
 const val=id=>{ const e=document.getElementById(id); return e? e.value : ''; };
@@ -727,7 +750,7 @@ const App={tab:'goals', draft:null, readiness:{sleep:3,stress:3,soreness:3,energ
 function toast(m){ const t=document.getElementById('toast'); t.textContent=m; t.classList.add('show');
   clearTimeout(t._t); t._t=setTimeout(()=>t.classList.remove('show'),1900); }
 const esc=s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
-const todaysDay=()=>S.program.days.find(d=>d.dow===DOW[new Date().getDay()])||null;
+const todaysDay=()=>planForDate(today());
 
 function render(){
   const setup=!S.meta.setup_done;
@@ -839,6 +862,7 @@ function wireSetup(){
     }
     S.meta.seed_e1rm=seeds;
 
+    S.meta.program_start=today();     // anchor for the 4-week test cadence
     S.meta.setup_done=true;
     await save(); App.tab='goals'; render(); toast('Coach is ready ✓');
   };
@@ -901,39 +925,57 @@ const TESTS=[
 const lastTest=m=>S.sessions.filter(s=>s.kind==='run'&&s.modality===m).sort((a,b)=>b.date.localeCompare(a.date))[0];
 function vTests(D){
   const rows=TESTS.map(t=>{
-    const last=lastTest(t.modality), ageD=last?daysBetween(new Date(),last.date):null, due=!last||ageD>=t.every;
+    const last=lastTest(t.modality), ageD=last?daysBetween(new Date(),last.date):null;
+    const next=nextTestDate(t.id);
     const editing=App.testEdit===t.id;
     let res='never done';
     if(last) res=(t.id==='test_5k'?fmt(last.duration_min)+' min ('+fmt(last.speed_kmh)+' km/h)':Math.round(last.distance_km*1000)+' m')+' · '+Math.round(ageD)+'d ago';
+    const nextTxt = next? 'Next: '+dlabel(next.date) : 'Not scheduled';
     const editRow=editing
       ? '<div class="row" style="margin-top:8px;gap:6px"><input type="number" inputmode="decimal" step="0.1" id="testVal" placeholder="'+esc(t.ask)+'" style="flex:1">'+
         '<button class="sm primary" id="testSave">Save</button><button class="sm ghost" id="testCancel">✕</button></div>'
-      : '<button class="sm'+(due?' primary':' ghost')+'" data-testedit="'+t.id+'" style="margin-top:8px">'+(due?'Log result':'Update')+'</button>';
-    return '<div class="goal"><div class="top"><div class="nm">'+t.icon+' '+esc(t.name)+(due?' <span class="pill warn">due</span>':'')+'</div>'+
+      : '<button class="sm ghost" data-testedit="'+t.id+'" style="margin-top:8px">Log off-schedule</button>';
+    return '<div class="goal"><div class="top"><div class="nm">'+t.icon+' '+esc(t.name)+' <span class="pill test">'+esc(nextTxt)+'</span></div>'+
       '<div class="val dim">'+esc(res)+'</div></div>'+
-      '<div class="hint" style="margin-top:5px">Feeds “'+esc(goal(t.goal).name)+'”</div>'+editRow+'</div>';
+      '<div class="hint" style="margin-top:5px">Feeds “'+esc(goal(t.goal).name)+'” · appears on Today &amp; the calendar on its day</div>'+editRow+'</div>';
   }).join('');
-  return '<div class="card"><h3>Field tests — run these ~monthly</h3><div class="col">'+rows+'</div>'+
-    '<div class="hint" style="margin-top:8px">These are your programmed tests. Logging one moves the goal bar above.</div></div>';
+  return '<div class="card"><h3>Field tests — programmed every 4 weeks</h3><div class="col">'+rows+'</div>'+
+    '<div class="hint" style="margin-top:8px">Each replaces a run in the deload week (Cooper on a Tue, 5k on a Sun). Logging one moves the goal bar above.</div></div>';
 }
-async function logTest(id){
+async function logTest(id, dateISO){
   const t=TESTS.find(x=>x.id===id); if(!t) return; const v=num('testVal');
   if(v==null||v<=0) return toast('Enter a number');
+  const date=dateISO||nowISO(), late=!!dateISO;
   const s = id==='test_5k'
-    ? { id:uid('s'), kind:'run', date:nowISO(), modality:'test_5k', day_label:'5k time-trial',
-        duration_min:v, distance_km:5, speed_kmh:+(5/(v/60)).toFixed(2), note:'5k time-trial', created_at:nowISO() }
-    : { id:uid('s'), kind:'run', date:nowISO(), modality:'test_cooper', day_label:'Cooper test',
-        duration_min:12, distance_km:+(v/1000).toFixed(3), note:'Cooper test', created_at:nowISO() };
-  S.sessions.push(s); App.testEdit=null; await save(); render(); toast(t.name+' logged ✓');
+    ? { id:uid('s'), kind:'run', date, modality:'test_5k', day_label:'5k time-trial',
+        duration_min:v, distance_km:5, speed_kmh:+(5/(v/60)).toFixed(2), note:'5k time-trial', backdated:late, created_at:nowISO() }
+    : { id:uid('s'), kind:'run', date, modality:'test_cooper', day_label:'Cooper test',
+        duration_min:12, distance_km:+(v/1000).toFixed(3), note:'Cooper test', backdated:late, created_at:nowISO() };
+  S.sessions.push(s); App.testEdit=null; App.backdate=null; if(dateISO) App.cal.open=dayKey(dateISO);
+  await save(); render(); toast(t.name+' logged ✓');
 }
+const testDesc=id=> id==='test_cooper'
+  ? 'Run as far as you can in 12 minutes. Warm up first, then go hard and even. Log the distance.'
+  : 'Run 5k as fast as you can hold. Warm up first. Log your finish time.';
 
+function vTest(day,D){
+  const t=TESTS.find(x=>x.id===day.test.id);
+  return '<div class="col">'+nudgeHTML()+
+    '<div class="card"><div class="exname">'+esc(t.name)+' <span class="pill test">test day</span></div>'+
+      '<div class="callout" style="margin-top:10px;border-color:var(--accent-2)"><b>'+esc(testDesc(t.id))+'</b>'+
+        '<div class="muted" style="margin-top:5px">Replaces today’s run. Feeds “'+esc(goal(t.goal).name)+'”.</div></div>'+
+      '<div style="margin-top:12px"><label class="f">'+esc(t.ask)+'</label><input type="number" inputmode="decimal" step="0.1" id="testVal"></div>'+
+      '<button class="primary" id="btnLogTestDay" style="width:100%;margin-top:12px;padding:15px">Log '+esc(t.name)+' →</button>'+
+      '<div class="hint" style="margin-top:8px">Do it fresh — keep the days around it easy.</div></div>'+
+  '</div>';
+}
 function vToday(D){
   const day=todaysDay();
   if(!day) return '<div class="col">'+nudgeHTML()+
     '<div class="card"><h3>Today</h3><div class="callout good">Rest day. Recovery is where the adaptation happens.</div>'+
     '<div class="hint" style="margin-top:10px">MON gym · TUE run · WED gym · FRI ruck · SUN run</div>'+
     '<button class="ghost" id="btnAnyDay" style="width:100%;margin-top:12px">Do a morning check instead</button></div></div>';
-  return day.kind==='gym' ? vGym(day,D) : vRun(day,D);
+  return day.test ? vTest(day,D) : day.kind==='gym' ? vGym(day,D) : vRun(day,D);
 }
 
 function vGym(day,D){
@@ -1078,10 +1120,12 @@ function vCal(D){
   const dates=Array.from({length:14},(_,i)=>addDays(start,i));
   const a=D.adherence;   // already computed over 14d in derive()
   const rows=dates.map(d=>calRow(d,D)+(d===t?'<div class="calweeklbl">Today</div>':'')).join('');
+  const nt=nextTestDate();
   return '<div class="col">'+nudgeHTML()+
     '<div class="card"><h3>Calendar</h3>'+
       '<div class="hint">'+a.logged+'/'+a.planned+' sessions logged, last 14 days'+
-      (D.flares.length?' · <span style="color:var(--bad)">'+D.flares.length+' flare'+(D.flares.length>1?'s':'')+'</span>':'')+'</div></div>'+
+      (D.flares.length?' · <span style="color:var(--bad)">'+D.flares.length+' flare'+(D.flares.length>1?'s':'')+'</span>':'')+'</div>'+
+      (nt?'<div class="hint" style="margin-top:5px">🎯 Next test: <b>'+esc(nt.test.name)+'</b> · '+dlabel(nt.date)+'</div>':'')+'</div>'+
     '<div class="row" style="justify-content:space-between;align-items:center">'+
       '<button class="ghost sm" id="calPrev">‹ prev</button>'+
       '<button class="ghost sm" id="calJump">'+dshort(start)+' – '+dshort(addDays(start,13))+'</button>'+
@@ -1103,9 +1147,10 @@ function calRow(d,D){
   const glyph = (!plan||isFuture||pre) ? ''
     : chk ? '<span class="glyph '+(flare?'flare':'clean')+'">'+(flare?'♥':'♡')+'</span>'
           : '<span class="glyph open">♡</span>';
+  const testTag = (plan&&plan.test&&!pre) ? ' <span class="pill test">test</span>' : '';
   const open=App.cal.open===d;
   return '<div class="calrow'+(isToday?' istoday':'')+(pre?' pre':'')+'">'+
-    '<div class="hd" data-toggle="'+d+'"><span><span class="date">'+dlabel(d)+'</span><span class="lbl">'+esc(label)+'</span></span>'+
+    '<div class="hd" data-toggle="'+d+'"><span><span class="date">'+dlabel(d)+'</span><span class="lbl">'+esc(label)+'</span>'+testTag+'</span>'+
       '<span>'+pill+glyph+'</span></div>'+
     (open?'<div class="detail">'+calDetail(d,plan,D)+'</div>':'')+
   '</div>';
@@ -1115,6 +1160,9 @@ function calDetail(d,plan,D){
   if(!plan) return '<div class="hint">Recovery day. Nothing to log.</div>';
   if(d<created) return '<div class="hint">Before this coach existed on your device.</div>';
   if(d>t){                                   // future — preview only
+    if(plan.test){ const tt=TESTS.find(x=>x.id===plan.test.id);
+      return '<div class="callout" style="border-color:var(--accent-2)"><b>'+esc(tt.name)+' — test day</b>'+
+        '<div class="muted" style="margin-top:4px">'+esc(testDesc(tt.id))+' Replaces this day’s run.</div></div>'; }
     if(plan.kind==='gym') return '<div class="hint">'+esc(plan.slots.map(s=>ex(s.exercise_id).name).join(' · '))+'</div>';
     const p=planRun(plan,D);
     return '<div class="callout"><b>'+esc(p.headline)+'</b><div class="muted" style="margin-top:4px">'+esc(p.detail)+'</div></div>'+
@@ -1132,6 +1180,17 @@ function calDetail(d,plan,D){
     }
     return '<div class="hint">'+s.duration_min+' min'+(s.distance_km?', '+s.distance_km+' km':'')+(s.load_kg?', '+s.load_kg+' kg':'')+
       ', RPE '+(s.rpe||'—')+(s.note?' · “'+esc(s.note)+'”':'')+tag+'</div>';
+  }
+  if(plan.test){                              // missed test day — single-input catch-up
+    const tt=TESTS.find(x=>x.id===plan.test.id);
+    if(App.backdate && App.backdate.date===d)
+      return '<div class="callout warn" style="margin-bottom:8px">⚠ Back-dated '+esc(tt.name)+' for <b>'+dlabel(d)+'</b>.</div>'+
+        '<label class="f">'+esc(tt.ask)+'</label><input type="number" inputmode="decimal" step="0.1" id="testVal">'+
+        '<div class="row" style="margin-top:8px"><button class="sm primary" data-bdtest="'+plan.test.id+'|'+d+'">Save</button>'+
+        '<button class="sm ghost" id="bdCancel">Cancel</button></div>';
+    return '<div class="hint">'+esc(tt.name)+' — you missed this test day.</div>'+
+      '<div class="hint" style="margin:6px 0">Did the test and forget to log it?</div>'+
+      '<button class="sm" data-backdate="'+d+'">Log result (back-dated)</button>';
   }
   if(App.backdate && App.backdate.date===d)   // mid back-date entry
     return plan.kind==='gym'? vBackdateGym(plan,d) : vBackdateRun(plan,d);
@@ -1226,6 +1285,12 @@ function wire(D){
   document.querySelectorAll('[data-backdate]').forEach(b=>b.onclick=()=>{ App.backdate={date:b.dataset.backdate}; render(); });
   const bs=document.getElementById('bdSave'); if(bs) bs.onclick=saveBackdate;
   const bc=document.getElementById('bdCancel'); if(bc) bc.onclick=()=>{ App.backdate=null; render(); };
+  document.querySelectorAll('[data-bdtest]').forEach(b=>b.onclick=()=>{
+    const parts=b.dataset.bdtest.split('|'); logTest(parts[0], parts[1]+'T12:00:00.000Z'); });
+
+  // Today: log a scheduled test day
+  const bt=document.getElementById('btnLogTestDay');
+  if(bt) bt.onclick=()=>{ const dd=todaysDay(); if(dd&&dd.test) logTest(dd.test.id); };
 
   document.querySelectorAll('[data-r]').forEach(seg=>seg.querySelectorAll('button').forEach(b=>b.onclick=()=>{
     App.readiness[seg.dataset.r]=+b.dataset.v; App.draft=null; render(); }));
@@ -1353,6 +1418,7 @@ async function logCheck(){
       const seed=seedState();
       for(const k of KEYS) if(!S[k]) S[k]=seed[k];
       if(S.meta.setup_done===undefined) S.meta.setup_done=true;   // pre-setup installs keep working
+      if(!S.meta.program_start) S.meta.program_start=dayKey(S.meta.created_at||nowISO());  // anchor test cadence for existing installs
     }
     try{ if(navigator.storage && navigator.storage.persist) await navigator.storage.persist(); }catch(_){}
     render();
