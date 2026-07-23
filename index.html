@@ -85,8 +85,10 @@
   .calrow .hd{display:flex;justify-content:space-between;align-items:center;padding:11px 4px;cursor:pointer;gap:8px}
   .calrow.istoday .hd{background:linear-gradient(90deg,rgba(76,194,255,.10),transparent)}
   .calrow.pre .hd{opacity:.4}
-  .calrow .date{font-family:var(--mono);color:var(--dim);font-size:11px;width:62px;display:inline-block}
-  .calrow .lbl{font-size:13px}
+  .calrow .date{font-family:var(--mono);color:var(--dim);font-size:11px;width:76px;padding-right:8px;display:inline-block;flex:none}
+  .calrow .lbl{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .calrow .hd > span:first-child{display:flex;align-items:baseline;min-width:0;flex:1;gap:2px}
+  .calrow .hd > span:last-child{flex:none;white-space:nowrap}
   .calrow .glyph{font-size:13px;margin-left:5px}
   .calrow .glyph.flare{color:var(--bad)} .calrow .glyph.clean{color:var(--good)} .calrow .glyph.open{color:var(--dim)}
   .calrow .detail{padding:2px 6px 14px}
@@ -1309,23 +1311,37 @@ function calRow(d,D){
   const glyph = (!plan||isFuture||pre) ? ''
     : chk ? '<span class="glyph '+(flare?'flare':'clean')+'">'+(flare?'♥':'♡')+'</span>'
           : '<span class="glyph open">♡</span>';
-  const testTag = (plan&&plan.test&&!pre) ? ' <span class="pill test">test</span>' : '';
+  const testTag = (plan&&(plan.test||plan.strengthTest)&&!pre) ? ' <span class="pill test">test</span>' : '';
+  /* rest day that had mobility logged gets a quiet tick — it is never "missed" */
+  const mobTag = (!plan&&!pre&&S.sessions.some(s=>s.kind==='mobility'&&dayKey(s.date)===d))
+    ? '<span class="pill good">✓ mobility</span>' : '';
   const open=App.cal.open===d;
   return '<div class="calrow'+(isToday?' istoday':'')+(pre?' pre':'')+'">'+
     '<div class="hd" data-toggle="'+d+'"><span><span class="date">'+dlabel(d)+'</span><span class="lbl">'+esc(label)+'</span>'+testTag+'</span>'+
-      '<span>'+pill+glyph+'</span></div>'+
+      '<span>'+pill+mobTag+glyph+'</span></div>'+
     (open?'<div class="detail">'+calDetail(d,plan,D)+'</div>':'')+
   '</div>';
 }
+/* Names for a gym day ON A GIVEN DATE — must resolve rotation, or the calendar
+   shows the base program instead of what you'll actually do (§5.7). */
+function slotNames(plan, iso){
+  return plan.slots.map(sl=>{ const e=ex(slotExercise(sl,iso)); return e?e.name:sl.exercise_id; }).join(' · ');
+}
 function calDetail(d,plan,D){
   const t=today(), created=dayKey((S.meta&&S.meta.created_at)||t);
-  if(!plan) return '<div class="hint">Recovery day. Nothing to log.</div>';
+  if(!plan){
+    const mob=S.sessions.find(s=>s.kind==='mobility'&&dayKey(s.date)===d);
+    return '<div class="hint">Rest day — nothing owed.</div>'+
+      (mob?'<div class="hint" style="margin-top:6px;color:var(--good)">✓ Mobility logged</div>'
+          :(d<=t?'<div class="hint" style="margin-top:6px">Optional ~10 min mobility flow — see the Today tab.</div>':''));
+  }
   if(d<created) return '<div class="hint">Before this coach existed on your device.</div>';
   if(d>t){                                   // future — preview only
     if(plan.test){ const tt=TESTS.find(x=>x.id===plan.test.id);
       return '<div class="callout" style="border-color:var(--accent-2)"><b>'+esc(tt.name)+' — test day</b>'+
         '<div class="muted" style="margin-top:4px">'+esc(testDesc(tt.id))+' Replaces this day’s run.</div></div>'; }
-    if(plan.kind==='gym') return '<div class="hint">'+esc(plan.slots.map(s=>ex(s.exercise_id).name).join(' · '))+'</div>';
+    if(plan.kind==='gym') return '<div class="hint">'+esc(slotNames(plan,d))+'</div>'+
+      (plan.strengthTest?'<div class="hint" style="margin-top:6px">One top set @ RPE 8 per lift — the 8-weekly progression record.</div>':'');
     const p=planRun(plan,D);
     return '<div class="callout"><b>'+esc(p.headline)+'</b><div class="muted" style="margin-top:4px">'+esc(p.detail)+'</div></div>'+
       '<div class="hint" style="margin-top:6px">Preview — computed from today’s state.</div>';
@@ -1356,7 +1372,7 @@ function calDetail(d,plan,D){
   }
   if(App.backdate && App.backdate.date===d)   // mid back-date entry
     return plan.kind==='gym'? vBackdateGym(plan,d) : vBackdateRun(plan,d);
-  const planTxt = plan.kind==='gym'? plan.slots.map(sl=>ex(sl.exercise_id).name).join(' · ') : plan.label;
+  const planTxt = plan.kind==='gym'? slotNames(plan,d) : plan.label;
   return '<div class="hint">Planned: '+esc(planTxt)+'</div>'+
     '<div class="hint" style="margin:6px 0">Did you train this and forget to log it?</div>'+
     '<button class="sm" data-backdate="'+d+'">Log it now (back-dated)</button>';
