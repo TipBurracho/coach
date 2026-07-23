@@ -57,6 +57,7 @@
   .bar > i{display:block;height:100%;background:linear-gradient(90deg,var(--accent),var(--accent-2));border-radius:99px}
   .bar.gate > i{background:linear-gradient(90deg,var(--warn),var(--good))}
   .setrow{display:grid;grid-template-columns:24px 1fr 1fr 1fr;gap:7px;align-items:center;padding:7px;border:1px solid var(--line);border-radius:10px;background:var(--panel-2);margin-bottom:7px}
+  .setrow.cols2{grid-template-columns:24px 1fr 1fr}
   .setrow .idx{width:24px;height:24px;border-radius:7px;background:#0a1620;border:1px solid var(--line);display:grid;place-items:center;font-size:11px;color:var(--muted)}
   .setrow small{display:block;font-size:9px;color:var(--dim);text-transform:uppercase;margin-bottom:2px}
   .setrow input{padding:8px;font-size:16px;text-align:center}
@@ -157,8 +158,21 @@ const dayKey=iso=>String(iso).slice(0,10);
 function addDays(iso,n){ const d=new Date(dayKey(iso)+'T00:00:00Z'); d.setUTCDate(d.getUTCDate()+n); return d.toISOString().slice(0,10); }
 const dowOf=iso=>DOW[new Date(dayKey(iso)+'T00:00:00Z').getUTCDay()];
 function dlabel(iso){ return new Date(dayKey(iso)+'T00:00:00Z').toLocaleDateString(undefined,{weekday:'short',timeZone:'UTC'}).toUpperCase()+' '+dayKey(iso).slice(5); }
+/* Benchmark battery (spec §5.8) — FIXED FOREVER, never rotates, tested 8-weekly.
+   Vertical push is deliberately absent: pressing near-maximal overhead is the
+   easiest way to arch, and that's the one risk not worth a number (L1b). */
+const BENCHMARKS=[
+  {id:'trap_bar_dl',  reps:5},
+  {id:'front_squat',  reps:5},
+  {id:'chest_press',  reps:5},
+  {id:'cs_row',       reps:6},
+  {id:'lat_pulldown', reps:6},
+  {id:'farmer_carry', reps:30}    // capacity: load x distance, not e1RM
+];
+
 /* Programmed field tests, auto every 4 weeks (deload week of each block):
-   Cooper replaces the Tue run, 5k time-trial replaces the Sun run. */
+   Cooper replaces the Tue run, 5k time-trial replaces the Sun run.
+   Every 8 weeks a strength test also replaces Gym B on the Wed. */
 function testForDate(iso){
   const start=dayKey((S.meta&&S.meta.program_start)||(S.meta&&S.meta.created_at)||today());
   if(dayKey(iso)<start) return null;
@@ -167,6 +181,7 @@ function testForDate(iso){
   const dow=dowOf(iso);
   if(dow==='tue') return {id:'test_cooper', modality:'test_cooper', name:'Cooper test'};
   if(dow==='sun') return {id:'test_5k',     modality:'test_5k',     name:'5k time-trial'};
+  if(dow==='wed' && weekIdx%8===7) return {id:'strength_test', name:'Strength test', strength:true};
   return null;
 }
 function nextTestDate(testId){
@@ -177,8 +192,30 @@ function nextTestDate(testId){
 }
 function planForDate(iso){
   const tf=testForDate(iso);
+  if(tf && tf.strength) return {id:'day_strength_test', dow:dowOf(iso), kind:'gym', label:tf.name, strengthTest:tf,
+    slots:BENCHMARKS.filter(b=>b.test!==false).map((b,i)=>({id:'bm'+i, exercise_id:b.id, sets:1, reps:[b.reps,b.reps], rpe:8, rest:180, role:'fixed'}))};
   if(tf) return {id:'day_'+tf.id, dow:dowOf(iso), kind:'run', modality:tf.modality, label:tf.name, test:tf};
   return S.program.days.find(d=>d.dow===dowOf(iso))||null;
+}
+
+/* ---------- Exercise rotation (spec §5.7) ----------
+   Deterministic hash — NEVER Math.random(), or the exercise would change while
+   he's mid-set. Accessories re-roll weekly, main lifts per 4-week block, and
+   `fixed` (the benchmark battery) never rotates at all. */
+function hash32(str){ let h=2166136261>>>0;
+  for(let i=0;i<str.length;i++){ h^=str.charCodeAt(i); h=Math.imul(h,16777619)>>>0; } return h>>>0; }
+const weekIndexOf=iso=>Math.floor(daysBetween(dayKey((S.meta&&S.meta.program_start)||today()), iso)/7);
+function slotExercise(slot, iso){
+  const base=slot.exercise_id;
+  const role=slot.role||'fixed';
+  if(role==='fixed' || !base) return base;
+  const exr=ex(base); if(!exr) return base;
+  const pool=S.exercises.filter(e=>e.pattern===exr.pattern);
+  if(pool.length<2) return base;
+  const wk=weekIndexOf(iso||today());
+  const period = role==='accessory' ? wk : Math.floor(wk/4);   // weekly vs per-block
+  if(period<=0) return base;   // first week/block runs exactly as programmed, so the seeded benchmarks apply
+  return pool[hash32(slot.id+'|'+role+'|'+period) % pool.length].id;
 }
 const sessOn=(iso,kind)=>S.sessions.find(s=>s.kind===kind && dayKey(s.date)===dayKey(iso));
 function dayFlareOn(iso){ const c=sessOn(iso,'check'); return c ? (c.symptoms||[]).some(x=>x.severity>=2) : false; }
@@ -213,7 +250,10 @@ async function save(){ for(const k of KEYS) await kvSet(k,S[k]); }
 
 /* ================= SEED — generic, no personal data ================= */
 function seedState(){
-  const E=(id,name,pattern,equip,inc,tags,alts,cues)=>({id,name,pattern,equip,increment:inc,tags:tags||[],alternatives:alts||[],cues:cues||[]});
+  /* log types (spec §4): weight_reps (default) | weight_distance | time | reps
+     -> drives which fields the gym card renders AND where the data is stored. */
+  const E=(id,name,pattern,equip,inc,tags,alts,cues,log)=>({id,name,pattern,equip,increment:inc,
+    tags:tags||[],alternatives:alts||[],cues:cues||[],log:log||'weight_reps'});
   return {
     profile:{ id:'usr', units:'metric', note:'', constraints:'' },
     goals:[
@@ -229,52 +269,92 @@ function seedState(){
        note:''}
     ],
     exercises:[
-      E('trap_bar_dl','Trap-bar deadlift','hinge','trap bar',5,['back_sparing'],['hip_thrust','rdl'],['Upright chest, neutral spine — low shear']),
-      E('chest_press','Chest-press machine','h_push','machine',5,[],['db_bench'],['Stable base, controlled tempo']),
-      E('rfe_split_squat','RFE split squat (3-1-1)','squat','dumbbell',2.5,['knee_hsr','unilateral','back_sparing'],['leg_press','step_up'],['3 seconds down','Knee tissue, minimal spinal load']),
-      E('dead_bug','Dead bug','core','bodyweight',0,['anti_extension'],['bird_dog'],['Ribs DOWN — anti-extension','Exhale hard at the end']),
-      E('calf_tib','Calf raise + tibialis raise','calf','machine',2.5,[],[],['Ankle armour for running','Superset them']),
-      E('front_squat','Front squat','squat','barbell',2.5,['knee_hsr','back_sparing'],['goblet_squat','leg_press'],['Elbows high, stay vertical','Upright torso spares the back']),
-      E('cs_row','Chest-supported row','h_pull','machine',2.5,['back_sparing'],['cable_row'],['Chest stays down — zero lumbar load']),
-      E('hk_press','Half-kneeling DB press + hold','v_push','dumbbell',2.5,['anti_extension','tactical_stance'],['landmine_press'],['Ribs DOWN, no arch','3s hold at top — stable platform']),
-      E('leg_extension','Leg extension (3-1-1 tempo)','knee','machine',5,['knee_hsr','back_sparing'],['spanish_squat','wall_sit'],['3s down, 1s pause — slow is the point','Heavy-slow-resistance: the evidence-based patellar tendon load','Stop ~2 reps shy. Tendon work, not a burnout set']),
-      E('spanish_squat','Spanish squat (isometric)','knee','band',0,['tendon_iso','knee_hsr'],['leg_extension','wall_sit'],['40s hold, knees behind the band','Band alternative if no leg-extension machine']),
-      E('suitcase_carry','Suitcase carry','carry','dumbbell',2.5,['carry','anti_rotation','tactical_patrol'],['farmer_carry'],['Do NOT lean — anti-lateral-flexion','Loaded carriage + trunk in one']),
-      E('tgu','Turkish get-up','tactical','kettlebell',2,['tactical_contact','tactical_stance'],['half_get_up'],['Ground-to-standing','Slow and controlled']),
-      E('leg_press','Leg press','squat','machine',5,['back_sparing'],[],['Spares the spine; keep depth honest']),
-      E('goblet_squat','Goblet squat','squat','dumbbell',2.5,['back_sparing'],[],[]),
-      E('hip_thrust','Hip thrust','hinge','barbell',5,['back_sparing'],[],['Glutes without spinal load']),
-      E('rdl','Romanian deadlift (light)','hinge','dumbbell',2.5,['back_sparing'],[],['Sub-max only, neutral spine']),
-      E('bird_dog','Bird dog','core','bodyweight',0,['anti_rotation','back_sparing'],[],[]),
-      E('cable_row','Seated cable row','h_pull','cable',2.5,['back_sparing'],[],[]),
-      E('db_bench','DB bench press','h_push','dumbbell',2.5,[],[],[]),
-      E('landmine_press','Landmine press','v_push','barbell',2.5,['back_sparing'],[],[]),
-      E('wall_sit','Wall sit','knee','bodyweight',0,['tendon_iso'],[],[]),
-      E('step_up','Step-up','squat','dumbbell',2.5,['unilateral'],[],[]),
-      E('farmer_carry','Farmer carry','carry','dumbbell',2.5,['carry','tactical_patrol'],[],[]),
-      E('half_get_up','Half get-up','tactical','kettlebell',2,['tactical_contact'],[],['Back-friendly regression'])
+      /* ---- 4a HINGE ---------------------------------------------------- */
+      E('trap_bar_dl','Trap-bar deadlift','hinge','trap bar',5,['back_sparing','benchmark'],['rdl','hip_thrust','pull_through'],['Upright chest, neutral spine — low shear','No arch at lockout: stand up, don’t lean back']),
+      E('rdl','Romanian deadlift','hinge','barbell',2.5,['back_sparing'],['sl_rdl','hip_thrust','pull_through'],['Sub-max only, neutral spine','Stand up — don’t lean back at the top']),
+      E('sl_rdl','Single-leg RDL','hinge','dumbbell',2.5,['back_sparing','unilateral'],['rdl','hip_thrust'],['Hips square','Ribs down']),
+      E('hip_thrust','Hip thrust','hinge','barbell',5,['back_sparing'],['pull_through','rdl'],['Tailbone TUCKED, stop at neutral','Never hyperextend at the top — finish with glutes, not your back']),
+      E('pull_through','Cable pull-through','hinge','cable',2.5,['back_sparing'],['hip_thrust','rdl'],['Hinge it, don’t squat it','Finish neutral — no lean-back']),
+      E('back_ext','45° back extension','hinge','bench',2.5,['back_sparing'],['leg_curl','bird_dog'],['HIP HINGE ONLY — stop at neutral','Never arch past flat']),
+      E('leg_curl','Leg curl','hinge','machine',5,['back_sparing'],['sl_rdl','back_ext'],['Hamstring isolation, spine off']),
+      /* ---- 4b SQUAT / KNEE ---------------------------------------------- */
+      E('front_squat','Front squat','squat','barbell',2.5,['knee_hsr','back_sparing','benchmark'],['goblet_squat','heel_goblet','leg_press'],['Elbows high, stay vertical','Upright torso spares the back']),
+      E('goblet_squat','Goblet squat','squat','dumbbell',2.5,['back_sparing'],['heel_goblet','front_squat'],['Spine-friendly regression','Elbows inside knees']),
+      E('rfe_split_squat','RFE split squat (3-1-1)','squat','dumbbell',2.5,['knee_hsr','unilateral','back_sparing'],['reverse_lunge','step_up','leg_press'],['3 seconds down','Knee tissue, minimal spinal load']),
+      E('reverse_lunge','Reverse lunge','squat','dumbbell',2.5,['unilateral','back_sparing'],['rfe_split_squat','step_up'],['Step back, torso tall']),
+      E('step_up','Step-up','squat','dumbbell',2.5,['unilateral'],['reverse_lunge','rfe_split_squat'],['Drive through the top foot — no push-off from the floor']),
+      E('leg_press','Leg press','squat','machine',5,['back_sparing'],['hack_squat','goblet_squat'],['Stop BEFORE the pelvis tucks — no lumbar rounding','Honest depth']),
+      E('hack_squat','Hack squat','squat','machine',5,['back_sparing'],['leg_press','front_squat'],['Supported squat pattern','Honest depth']),
+      E('leg_extension','Leg extension (3-1-1 tempo)','knee','machine',5,['knee_hsr','back_sparing'],['wall_sit','leg_press'],['3s down, 1s pause — slow is the point','Heavy-slow-resistance: the evidence-based patellar tendon load','Stop ~2 reps shy — tendon work, not a burnout set']),
+      E('wall_sit','Wall sit','knee','bodyweight',0,['tendon_iso'],['leg_extension'],['Isometric hold','Ribs down, don’t arch off the wall'],'time'),
+      E('heel_goblet','Heel-elevated goblet squat','squat','dumbbell',2.5,['back_sparing','knee_hsr'],['goblet_squat','front_squat'],['More quad, less ankle demand']),
+      /* ---- 4c HORIZONTAL PUSH -------------------------------------------- */
+      E('chest_press','Chest-press machine','h_push','machine',5,['benchmark'],['db_bench','floor_press'],['Stable base, controlled tempo']),
+      E('db_bench','DB bench press','h_push','dumbbell',2.5,[],['floor_press','chest_press'],['No deliberate arch — flat back on the bench']),
+      E('incline_db','Incline DB press','h_push','dumbbell',2.5,[],['db_bench','chest_press'],['Ribs down — don’t arch to press']),
+      E('push_up','Push-up','h_push','bodyweight',0,['anti_extension'],['db_bench','floor_press'],['Brace hard — push and anti-extension together','Ribs down, no sag'],'reps'),
+      E('floor_press','Floor press','h_push','dumbbell',2.5,[],['db_bench','chest_press'],['The floor physically limits the arch — safest press for you']),
+      /* ---- 4d VERTICAL PUSH (trained, never max-tested) ------------------- */
+      E('hk_press','Half-kneeling DB press + hold','v_push','dumbbell',2.5,['anti_extension','tactical_stance'],['landmine_press','seated_db_press'],['Ribs DOWN, no arch','3s hold at the top — shooting platform']),
+      E('landmine_press','Landmine press','v_push','barbell',2.5,['back_sparing'],['hk_press','machine_press'],['Angled path — friendliest way overhead','Ribs down']),
+      E('seated_db_press','Seated DB shoulder press','v_push','dumbbell',2.5,[],['machine_press','hk_press'],['Do NOT arch into the backrest to press','If you can’t get overhead without arching, use half-kneeling instead']),
+      E('machine_press','Machine shoulder press','v_push','machine',5,[],['seated_db_press','landmine_press'],['Most stable overhead option','Ribs down — don’t arch into the pad']),
+      /* ---- 4e HORIZONTAL PULL -------------------------------------------- */
+      E('cs_row','Chest-supported row','h_pull','machine',2.5,['back_sparing','benchmark'],['cable_row','db_row','machine_row'],['Chest stays down — zero lumbar load']),
+      E('cable_row','Seated cable row','h_pull','cable',2.5,['back_sparing'],['cs_row','machine_row'],['Spine supported','Don’t lean back at the finish']),
+      E('db_row','Single-arm DB row','h_pull','dumbbell',2.5,['back_sparing','unilateral'],['cs_row','cable_row'],['Chest supported, hips square']),
+      E('inverted_row','Inverted row','h_pull','bodyweight',0,['anti_extension'],['cs_row','db_row'],['Ribs down — anti-extension while you pull'],'reps'),
+      E('machine_row','Machine row','h_pull','machine',5,['back_sparing'],['cs_row','cable_row'],['Simple and stable']),
+      /* ---- 4f VERTICAL PULL ---------------------------------------------- */
+      E('lat_pulldown','Lat pulldown','v_pull','machine',2.5,['benchmark'],['assisted_pullup','sa_pulldown'],['Don’t lean back to finish the rep','Pick a comfortable grip']),
+      E('assisted_pullup','Assisted pull-up','v_pull','machine',2.5,[],['lat_pulldown','pull_up'],['Bridge to bodyweight','Full hang at the bottom']),
+      E('pull_up','Pull-up / chin-up','v_pull','bodyweight',0,[],['assisted_pullup','lat_pulldown'],['STRICT — no kipping','Full hang is decompressive for your back'],'reps'),
+      E('sa_pulldown','Straight-arm pulldown','v_pull','cable',2.5,[],['lat_pulldown'],['Lats without elbow load']),
+      /* ---- 4g CORE (anti-movement) --------------------------------------- */
+      E('dead_bug','Dead bug','core','bodyweight',0,['anti_extension'],['bird_dog','plank'],['Ribs DOWN — your key L5-S1 protector','Exhale hard at the end of each rep'],'reps'),
+      E('bird_dog','Bird dog','core','bodyweight',0,['anti_rotation','back_sparing'],['dead_bug','plank'],['Hips level, low back still'],'reps'),
+      E('plank','Front plank + breathing','core','bodyweight',0,['anti_extension','tactical_stance'],['dead_bug','side_plank'],['Tailbone tucked','Breathe without losing the brace'],'time'),
+      E('side_plank','Side plank','core','bodyweight',0,['anti_rotation'],['plank','suitcase_hold'],['Anti-lateral-flexion — stack the hips'],'time'),
+      E('pallof','Pallof press','core','cable',2.5,['anti_rotation','tactical_stance'],['hk_antirot','side_plank'],['Anti-rotation = a stable shooting platform','Ribs down']),
+      E('hk_antirot','Half-kneeling anti-rotation hold','core','cable',2.5,['anti_rotation','tactical_stance'],['pallof','plank'],['Literal shooting position','Squeeze the down-leg glute'],'time'),
+      E('suitcase_hold','Suitcase hold (static)','core','dumbbell',2.5,['anti_rotation','carry'],['side_plank','suitcase_carry'],['Trunk under load — nothing moves','Do not lean'],'time'),
+      /* ---- 4h CARRIES ----------------------------------------------------- */
+      E('suitcase_carry','Suitcase carry','carry','dumbbell',2.5,['carry','anti_rotation','tactical_patrol'],['farmer_carry','front_rack_carry'],['Do NOT lean — anti-lateral-flexion','Loaded carriage + trunk in one'],'weight_distance'),
+      E('farmer_carry','Farmer carry','carry','dumbbell',2.5,['carry','tactical_patrol','benchmark'],['suitcase_carry','front_rack_carry'],['Stay stacked — don’t lean back','Grip + trunk + work capacity'],'weight_distance'),
+      E('front_rack_carry','Front-rack carry','carry','kettlebell',2,['carry','tactical_patrol'],['farmer_carry','suitcase_carry'],['Upright, ribs down — the rack position tempts an arch'],'weight_distance'),
+      E('kb_march','KB march in place','carry','kettlebell',2,['carry','anti_rotation'],['suitcase_hold','front_rack_carry'],['Carry stimulus with zero space','Ribs down, knee to hip height'],'time'),
+      /* ---- 4i TACTICAL ---------------------------------------------------- */
+      E('tgu','Turkish get-up','tactical','kettlebell',2,['tactical_contact','tactical_stance'],['half_get_up','up_down'],['Ground-to-standing — slow and controlled','Controlled bridge: no hyperextension coming up']),
+      E('half_get_up','Half get-up','tactical','kettlebell',2,['tactical_contact'],['tgu','up_down'],['Back-friendly regression']),
+      E('up_down','Get-up to stand / up-down','tactical','bodyweight',0,['tactical_contact'],['half_get_up','tgu'],['The actual contact pattern','Scale the volume — this is impact'],'reps'),
+      /* ---- 4j ANKLE / CALF ------------------------------------------------ */
+      E('calf_raise','Standing calf raise','calf','machine',2.5,[],['seated_calf','sl_calf'],['Full range, pause at the top']),
+      E('seated_calf','Seated calf raise','calf','machine',2.5,[],['calf_raise','sl_calf'],['Soleus — the running muscle']),
+      E('sl_calf','Single-leg calf raise','calf','bodyweight',0,['unilateral'],['calf_raise','seated_calf'],['Exposes side-to-side deficits'],'reps'),
+      E('tib_raise','Tibialis raise','calf','bodyweight',0,[],['knee_to_wall'],['Shin health and dorsiflexion for running'],'reps')
     ],
     program:{
       id:'prog_rebuild', version:1, status:'active', created_at:nowISO(), created_by:'engine',
       phase:1, block_week:1,
       rationale:'Phase 1 — Build. Aerobic engine + tissue tolerance. Low-impact base with one gated quality impact session; strength rebuild with knee-tendon heavy-slow-resistance and anti-extension core. Gym is strength only (45 min total).',
       days:[
-        {id:'gym_a', dow:'mon', kind:'gym', label:'Gym A — Hinge / Push', slots:[
-          {id:'a1', exercise_id:'trap_bar_dl',     sets:3, reps:[5,5],   rpe:7,    rest:150},
-          {id:'a2', exercise_id:'chest_press',     sets:3, reps:[6,8],   rpe:7,    rest:120},
-          {id:'a3', exercise_id:'rfe_split_squat', sets:2, reps:[8,8],   rpe:6,    rest:90},
-          {id:'a4', exercise_id:'dead_bug',        sets:3, reps:[8,8],   rpe:null, rest:45},
-          {id:'a5', exercise_id:'calf_tib',        sets:2, reps:[15,15], rpe:null, rest:45}
+        {id:'gym_a', dow:'mon', kind:'gym', label:'Gym A — Hinge / Push / Pull', slots:[
+          {id:'a1', exercise_id:'trap_bar_dl',     sets:3, reps:[5,5],   rpe:7,    rest:150, role:'main'},
+          {id:'a2', exercise_id:'chest_press',     sets:3, reps:[6,8],   rpe:7,    rest:120, role:'main'},
+          {id:'a3', exercise_id:'lat_pulldown',    sets:3, reps:[8,10],  rpe:7,    rest:90,  role:'main'},
+          {id:'a4', exercise_id:'rfe_split_squat', sets:2, reps:[8,8],   rpe:6,    rest:90,  role:'accessory'},
+          {id:'a5', exercise_id:'dead_bug',        sets:3, reps:[8,8],   rpe:null, rest:45,  role:'fixed'},
+          {id:'a6', exercise_id:'calf_raise',      sets:2, reps:[15,15], rpe:null, rest:45,  role:'accessory'}
         ]},
         {id:'run_tue', dow:'tue', kind:'run', modality:'run_walk', label:'Run — run/walk ladder',
           note:'The gated impact session. Every bout stays under your symptom line — volume first, bout length later.'},
-        {id:'gym_b', dow:'wed', kind:'gym', label:'Gym B — Squat / Pull', slots:[
-          {id:'b1', exercise_id:'front_squat',    sets:3, reps:[5,5],   rpe:7,    rest:150},
-          {id:'b2', exercise_id:'cs_row',         sets:3, reps:[8,10],  rpe:7,    rest:90},
-          {id:'b3', exercise_id:'hk_press',       sets:2, reps:[8,8],   rpe:7,    rest:90},
-          {id:'b4', exercise_id:'leg_extension',  sets:3, reps:[6,8],   rpe:7,    rest:90},
-          {id:'b5', exercise_id:'suitcase_carry', sets:3, reps:[20,20], rpe:null, rest:60, carry:true},
-          {id:'b6', exercise_id:'tgu',            sets:3, reps:[2,2],   rpe:6,    rest:60}
+        {id:'gym_b', dow:'wed', kind:'gym', label:'Gym B — Squat / Pull / Press', slots:[
+          {id:'b1', exercise_id:'front_squat',    sets:3, reps:[5,5],   rpe:7,    rest:150, role:'main'},
+          {id:'b2', exercise_id:'cs_row',         sets:3, reps:[8,10],  rpe:7,    rest:90,  role:'main'},
+          {id:'b3', exercise_id:'hk_press',       sets:2, reps:[8,8],   rpe:7,    rest:90,  role:'main'},
+          {id:'b4', exercise_id:'leg_extension',  sets:3, reps:[6,8],   rpe:7,    rest:90,  role:'fixed'},
+          {id:'b5', exercise_id:'suitcase_carry', sets:3, reps:[20,20], rpe:null, rest:60,  role:'accessory'},
+          {id:'b6', exercise_id:'tgu',            sets:3, reps:[2,2],   rpe:6,    rest:60,  role:'accessory'}
         ]},
         {id:'run_fri', dow:'fri', kind:'run', modality:'ruck', label:'Ruck / loaded walk',
           note:'Zone 2 and loaded carriage in one session. Low impact. Progress the LOAD slowly.'},
@@ -302,7 +382,8 @@ function derive(){
       for(const st of (s.sets||[])){
         const d=per[st.exercise_id]||(per[st.exercise_id]={e1:0,hist:[],_drift:[],trend:'—',chg:0,rpe_drift:0});
         const a=st.actual;
-        if(a.load_kg && a.reps && a.rpe){
+        /* only weight x reps sets can yield an e1RM — a carry or a timed hold must never */
+        if((st.log||'weight_reps')==='weight_reps' && a.load_kg && a.reps && a.rpe){
           const e=e1rmOf(a.load_kg,a.reps,a.rpe);
           if(!best[st.exercise_id] || e>best[st.exercise_id]) best[st.exercise_id]=e;
           if(st.prescribed && st.prescribed.rpe!=null) d._drift.push({age, v:a.rpe-st.prescribed.rpe});
@@ -445,10 +526,11 @@ function readinessVerdict(score){
        :         'heavily backed off — consider making today a walk';
 }
 
-function planGym(day, readiness, D){
+function planGym(day, readiness, D, iso){
   const steps=readinessSteps(readinessScore(readiness));
+  const onDate=iso||today();
   return day.slots.map(sl=>{
-    let exId=sl.exercise_id, swapped=null;
+    let exId=slotExercise(sl,onDate), swapped=null;   // rotation resolves here (§5.7)
     if(D.flareAreas.includes('back') && ['trap_bar_dl','front_squat'].includes(exId)){
       swapped=exId; exId = exId==='trap_bar_dl' ? 'hip_thrust' : 'leg_press';
     } else if(D.flareAreas.includes('knee') && ['front_squat','rfe_split_squat'].includes(exId)){
@@ -458,8 +540,9 @@ function planGym(day, readiness, D){
     const targetReps=sl.reps[1], targetRpe=sl.rpe;
     let suggested=null, basis='first time — log your working weight', mods=[];
 
-    if(sl.isometric){ basis=targetReps+'s hold'; }
-    else if(sl.carry){ basis=targetReps+' m per trip'; }
+    if(e.log==='time'){ basis=targetReps+'s hold'; }
+    else if(e.log==='weight_distance'){ basis='log the load and the distance you covered'; }
+    else if(e.log==='reps'){ basis='bodyweight — log your reps'; }
     else if(targetRpe && d && d.e1>0){
       let L=loadFor(d.e1, targetReps, targetRpe, e.increment||2.5);
       basis='e1RM '+fmt(d.e1)+' kg → '+targetReps+'×@'+targetRpe;
@@ -491,7 +574,7 @@ function planRun(day, D){
   }
   if(day.modality==='ruck'){ const r=S.meta.ruck;
     return {gated:false, headline:r.minutes+' min ruck @ '+r.load_kg+' kg',
-      detail:'Zone 2 + loaded carriage in one. Brisk walk, neutral spine, no hunching. Progress the load slowly.'};
+      detail:'Zone 2 + loaded carriage in one. Load HIGH and CLOSE to your back; lean slightly forward from the ankles — do NOT counter-arch to balance the pack. Progress the load slowly.'};
   }
   return {gated:false, headline:'35–45 min easy Zone 2',
     detail: gated? 'Flare logged — keep it to walking or the crosstrainer today.' : 'Nasal-breathing pace, RPE ≤4. Walk/jog mix.'};
@@ -506,7 +589,8 @@ function buildBrief(userNote){
   L.push('## Athlete');
   if(S.profile.note) L.push(S.profile.note);
   if(S.profile.constraints) L.push('**Constraints (must program around these):** '+S.profile.constraints);
-  L.push('Week: Mon gym · Tue run · Wed gym · Fri ruck · Sun run. Gym is strength only, hard time cap.');
+  L.push('Week: Mon gym · Tue run · Wed gym · Fri ruck · Sun run (Thu/Sat rest + optional mobility). Gym is strength only, hard 45-min cap.');
+  L.push('**Rotation:** accessory slots rotate weekly, main slots each 4-week block (same movement pattern). **Benchmark battery** — trap-bar DL, front squat, chest press, chest-supported row, lat pulldown, farmer carry — never rotates and is re-tested every 8 weeks; that is the long-term progression record. Vertical push is trained but deliberately never max-tested (arch risk).');
   L.push('');
   L.push('## Goals & progress');
   for(const g of S.goals){
@@ -551,16 +635,18 @@ function buildBrief(userNote){
     if(s.kind==='gym'){
       const tops={};
       for(const st of s.sets){
-        const e=e1rmOf(st.actual.load_kg,st.actual.reps,st.actual.rpe);
+        const e=(st.log||'weight_reps')==='weight_reps'? e1rmOf(st.actual.load_kg,st.actual.reps,st.actual.rpe) : 0;
         if(!tops[st.exercise_id] || e>tops[st.exercise_id].e) tops[st.exercise_id]={e,st};
       }
-      L.push('- '+s.date.slice(0,10)+' **'+s.day_label+'** (readiness '+fmt(readinessScore(s.readiness))+'/5): '+
-        Object.keys(tops).map(id=>(ex(id)?ex(id).name:id)+' '+tops[id].st.actual.load_kg+'×'+tops[id].st.actual.reps+'@'+tops[id].st.actual.rpe).join('; ')+
+      L.push('- '+s.date.slice(0,10)+' **'+s.day_label+'**'+(s.readiness?' (readiness '+fmt(readinessScore(s.readiness))+'/5)':'')+': '+
+        Object.keys(tops).map(id=>(ex(id)?ex(id).name:id)+' '+setText(tops[id].st)).join('; ')+
         (s.note?' — "'+s.note+'"':''));
     } else if(s.kind==='run'){
       L.push('- '+s.date.slice(0,10)+' **'+s.day_label+'** ('+s.modality+'): '+s.duration_min+' min'+
         (s.distance_km?', '+s.distance_km+' km':'')+(s.load_kg?', '+s.load_kg+' kg':'')+', RPE '+(s.rpe||'—')+
         (s.note?' — "'+s.note+'"':''));
+    } else if(s.kind==='mobility'){
+      L.push('- '+s.date.slice(0,10)+' **mobility** ('+(s.minutes||10)+' min)'+(s.note?' — "'+s.note+'"':''));
     } else {
       const sy=(s.symptoms||[]).filter(x=>x.severity>0).map(x=>x.area+' '+x.severity).join(', ')||'clean';
       L.push('- '+s.date.slice(0,10)+' **morning check**: '+sy+(s.bodyweight_kg?' · '+s.bodyweight_kg+' kg':'')+
@@ -916,6 +1002,28 @@ function vGoals(D){
   '</div>';
 }
 
+/* Rest-day mobility (spec §4L) — all safe unsupervised. Kept OUT of S.exercises
+   so it never touches planGym/rotation. Priority flow first. */
+const MOBILITY=[
+  {id:'pelvic_tilt',       name:'Supine posterior pelvic tilt', dose:'10 × 5s', why:'Find neutral. Gently flatten the low back — the single most valuable drill for your lordosis'},
+  {id:'breathing_9090',    name:'90/90 breathing (feet up)',    dose:'5 breaths', why:'Ribs down + posterior tilt + long exhale'},
+  {id:'supine_hip_flexor', name:'Supine hip-flexor stretch (bench edge)', dose:'45s/side', why:'HUG the opposite knee — it locks the pelvis so you cannot arch'},
+  {id:'nerve_glide',       name:'Sciatic nerve glide',          dose:'10 slow', why:'A glide, not a stretch. Stop before any tingle'},
+  {id:'figure_4',          name:'Figure-4 glute stretch',       dose:'45s/side', why:'Supine, low back flat'},
+  {id:'knee_to_wall',      name:'Knee-to-wall dorsiflexion',    dose:'10/side', why:'Heel down, knee over toes — direct running payoff'},
+  {id:'open_book',         name:'Side-lying open book',         dose:'8/side', why:'Knees stacked and still — rotate from the ribcage'},
+  {id:'ham_strap',         name:'Supine hamstring stretch (strap)', dose:'45s/side', why:'Other knee BENT, foot on floor. Gentle — do not force'},
+  {id:'hip_9090',          name:'90/90 hip switch',             dose:'8/side', why:'Move from the hips — do not arch to gain rotation'},
+  {id:'adductor_rock',     name:'Adductor rock-back',           dose:'8 slow', why:'Flat back; stop before the pelvis tucks'},
+  {id:'soleus_stretch',    name:'Bent-knee calf stretch',       dose:'45s/side', why:'Knee bent to bias soleus'},
+  {id:'quad_tspine',       name:'Quadruped t-spine rotation',   dose:'8/side', why:'Low back stays still'},
+  {id:'wall_slides',       name:'Wall slides (ribs down)',      dose:'10', why:'Overhead reach without arching'},
+  {id:'knee_to_chest',     name:'Supine knee-to-chest',         dose:'30s/side', why:'Usually relieving for this segment'},
+  {id:'childs_pose',       name:"Child's pose",                 dose:'45s', why:'Unloaded flexion — fine for you'},
+  {id:'hk_hinge_reach',    name:'Half-kneeling hinge reach',    dose:'8/side', why:'Hinge from the HIP; neutral spine'}
+];
+const MOB_FLOW=['pelvic_tilt','breathing_9090','supine_hip_flexor','nerve_glide','figure_4','knee_to_wall','open_book'];
+
 /* Programmed field tests — a Cooper (12-min) and a 5k time-trial, due monthly.
    Logging one writes a real run session; derive() fills the goal from it. */
 const TESTS=[
@@ -954,6 +1062,15 @@ async function logTest(id, dateISO){
   S.sessions.push(s); App.testEdit=null; App.backdate=null; if(dateISO) App.cal.open=dayKey(dateISO);
   await save(); render(); toast(t.name+' logged ✓');
 }
+/* Render one logged set for its type — used by the calendar summary and the brief. */
+function setText(st){
+  const a=st.actual||{}, t=st.log||'weight_reps';
+  const rpe=a.rpe?'@'+a.rpe:'';
+  if(t==='time')            return (a.seconds!=null?a.seconds:'—')+'s'+rpe;
+  if(t==='reps')            return (a.reps!=null?a.reps:'—')+' reps'+rpe;
+  if(t==='weight_distance') return (a.load_kg!=null?a.load_kg:0)+'kg×'+(a.distance_m!=null?a.distance_m:'—')+'m'+rpe;
+  return (a.load_kg!=null?a.load_kg:0)+'×'+(a.reps!=null?a.reps:'—')+rpe;
+}
 const testDesc=id=> id==='test_cooper'
   ? 'Run as far as you can in 12 minutes. Warm up first, then go hard and even. Log the distance.'
   : 'Run 5k as fast as you can hold. Warm up first. Log your finish time.';
@@ -969,12 +1086,29 @@ function vTest(day,D){
       '<div class="hint" style="margin-top:8px">Do it fresh — keep the days around it easy.</div></div>'+
   '</div>';
 }
+function vMobility(){
+  const done=S.sessions.some(s=>s.kind==='mobility'&&dayKey(s.date)===today());
+  const rows=MOB_FLOW.map((id,i)=>{ const m=MOBILITY.find(x=>x.id===id); if(!m) return '';
+    return '<div class="goal" style="margin-bottom:7px"><div class="top">'+
+      '<div class="nm">'+(i+1)+'. '+esc(m.name)+'</div><div class="val dim">'+esc(m.dose)+'</div></div>'+
+      '<div class="hint" style="margin-top:5px">'+esc(m.why)+'</div></div>'; }).join('');
+  return '<div class="col">'+nudgeHTML()+
+    '<div class="card"><h3>Rest day</h3>'+
+      '<div class="callout good">Recovery is where the adaptation happens. Nothing is owed today.</div>'+
+      '<div class="hint" style="margin-top:10px">MON gym · TUE run · WED gym · FRI ruck · SUN run</div></div>'+
+    '<div class="card"><h3>Optional mobility — ~10 min</h3>'+
+      '<div class="hint" style="margin-bottom:10px">Built for your lordosis: find neutral, free the hip flexor <b>without arching</b>, calm the nerve. Don’t chase hamstring length.</div>'+
+      rows+
+      (done?'<div class="callout good" style="margin-top:8px">✓ Logged today</div>'
+           :'<button class="primary" id="btnLogMob" style="width:100%;margin-top:10px">Log mobility ✓</button>')+
+      '<div class="hint" style="margin-top:8px">Skipping this never counts as a missed session.</div></div>'+
+    '<button class="ghost" id="btnAnyDay" style="width:100%">Do a morning check instead</button>'+
+  '</div>';
+}
 function vToday(D){
   const day=todaysDay();
-  if(!day) return '<div class="col">'+nudgeHTML()+
-    '<div class="card"><h3>Today</h3><div class="callout good">Rest day. Recovery is where the adaptation happens.</div>'+
-    '<div class="hint" style="margin-top:10px">MON gym · TUE run · WED gym · FRI ruck · SUN run</div>'+
-    '<button class="ghost" id="btnAnyDay" style="width:100%;margin-top:12px">Do a morning check instead</button></div></div>';
+  if(!day) return vMobility();
+  if(day.strengthTest) return vGym(day,D);
   return day.test ? vTest(day,D) : day.kind==='gym' ? vGym(day,D) : vRun(day,D);
 }
 
@@ -994,29 +1128,51 @@ function vGym(day,D){
     '<button class="primary" id="btnLogGym" style="padding:15px">Log session →</button>'+
   '</div>';
 }
+/* Which fields a set logs, per the exercise's `log` type (spec §4).
+   Previously a carry rendered "metres | reps" but bound metres to load_kg, and a
+   40s hold stored load_kg:40. Each type now renders and stores its own fields. */
+function logFields(exr){
+  const inc=exr.increment||2.5;
+  switch(exr.log){
+    case 'weight_distance': return [{k:'load',label:'kg',step:inc},{k:'dist',label:'metres',step:5}];
+    case 'time':            return [{k:'secs',label:'seconds',step:5}];
+    case 'reps':            return [{k:'reps',label:'reps',step:1}];
+    default:                return [{k:'load',label:'kg',step:inc},{k:'reps',label:'reps',step:1}];
+  }
+}
+function blankSet(r){
+  const t=r.ex.log, o={rpe:''};
+  if(t==='time') o.secs = r.targetReps;
+  else if(t==='reps') o.reps = r.targetReps;
+  else if(t==='weight_distance'){ o.load = r.suggested!=null?r.suggested:''; o.dist = r.targetReps; }
+  else { o.load = r.suggested!=null?r.suggested:''; o.reps = r.targetReps; }
+  return o;
+}
 function gymSlot(r){
-  const sl=r.slot;
-  if(!App.draft.actuals[sl.id]) App.draft.actuals[sl.id]=Array.from({length:sl.sets},()=>({
-    load: r.suggested!=null? r.suggested : '', reps: sl.reps[1], rpe:'' }));
+  const sl=r.slot, t=r.ex.log;
+  if(!App.draft.actuals[sl.id]) App.draft.actuals[sl.id]=Array.from({length:sl.sets},()=>blankSet(r));
   const arr=App.draft.actuals[sl.id];
-  const unit = sl.isometric?'sec' : sl.carry?'metres' : 'kg';
-  const head = r.suggested!=null ? r.suggested+' kg'
-             : sl.isometric ? sl.reps[1]+'s hold'
-             : sl.carry ? sl.reps[1]+' m'
-             : '—';
+  const fields=logFields(r.ex);
+  const head = t==='time' ? sl.reps[1]+'s hold'
+             : t==='weight_distance' ? (r.suggested!=null? r.suggested+' kg × ':'')+sl.reps[1]+' m'
+             : t==='reps' ? sl.reps[1]+' reps'
+             : (r.suggested!=null ? r.suggested+' kg' : '—');
+  const tag = t==='time' ? sl.sets+'×'+sl.reps[1]+'s'
+            : t==='weight_distance' ? sl.sets+'×'+sl.reps[1]+'m'
+            : sl.sets+'×'+(sl.reps[0]===sl.reps[1]?sl.reps[0]:sl.reps.join('-'));
   return '<div class="card">'+
     '<div class="row" style="justify-content:space-between;align-items:baseline">'+
       '<div class="exname">'+esc(r.ex.name)+'</div>'+
-      '<div class="tag">'+esc(sl.sets)+'×'+esc(sl.reps[0]===sl.reps[1]?sl.reps[0]:sl.reps.join('-'))+(sl.rpe?' @'+esc(sl.rpe):'')+'</div></div>'+
+      '<div class="tag">'+esc(tag)+(sl.rpe?' @'+esc(sl.rpe):'')+'</div></div>'+
     (r.swapped?'<div class="callout warn" style="margin-top:8px">⇄ Swapped from <b>'+esc(ex(r.swapped).name)+'</b> — symptom flare logged. Protecting the tissue.</div>':'')+
     '<div class="callout '+(r.mods.some(m=>m.indexOf('drift')>=0)?'warn':'info')+'" style="margin-top:8px">'+
       '<b>'+esc(head)+'</b> <span class="dim">· '+esc(r.basis)+'</span>'+
       (r.mods.length?'<div class="mono dim" style="font-size:11px;margin-top:3px">'+esc(r.mods.join(' · '))+'</div>':'')+'</div>'+
     (r.ex.cues.length?'<div class="hint" style="margin-top:6px">'+r.ex.cues.map(c=>'• '+esc(c)).join('<br>')+'</div>':'')+
     '<div style="margin-top:10px">'+arr.map((a,si)=>
-      '<div class="setrow"><div class="idx">'+(si+1)+'</div>'+
-      '<div><small>'+unit+'</small><input type="number" inputmode="decimal" step="'+(sl.isometric||sl.carry?5:(r.ex.increment||2.5))+'" data-s="'+sl.id+'" data-i="'+si+'" data-k="load" value="'+a.load+'"></div>'+
-      '<div><small>'+(sl.isometric?'—':'reps')+'</small><input type="number" inputmode="numeric" data-s="'+sl.id+'" data-i="'+si+'" data-k="reps" value="'+a.reps+'"'+(sl.isometric?' disabled':'')+'></div>'+
+      '<div class="setrow'+(fields.length===1?' cols2':'')+'"><div class="idx">'+(si+1)+'</div>'+
+      fields.map(f=>'<div><small>'+f.label+'</small><input type="number" inputmode="decimal" step="'+f.step+
+        '" data-s="'+sl.id+'" data-i="'+si+'" data-k="'+f.k+'" value="'+(a[f.k]!=null?a[f.k]:'')+'"></div>').join('')+
       '<div><small>RPE</small><input type="number" inputmode="decimal" step="0.5" min="5" max="10" data-s="'+sl.id+'" data-i="'+si+'" data-k="rpe" value="'+a.rpe+'" placeholder="?"></div></div>').join('')+
     '</div></div>';
 }
@@ -1106,6 +1262,12 @@ function vData(D){
       '<input type="file" id="fileIn" accept="application/json,.json" style="display:none">'+
       (lastBackupError? '<div class="hint" style="margin-top:8px;color:var(--bad)">Last error — '+esc((lastBackupError.name||'Error')+': '+(lastBackupError.message||''))+'</div>':'')+
       '</div>'+
+    '<div class="card"><h3>Profile &amp; constraints</h3>'+
+      '<div class="hint" style="margin-bottom:8px">These go into every brief you export — keep them current.</div>'+
+      '<div><label class="f">Background</label><textarea id="pfNote">'+esc(S.profile.note||'')+'</textarea></div>'+
+      '<div style="margin-top:8px"><label class="f">Injuries / limits the coach must program around</label>'+
+      '<textarea id="pfCon" style="min-height:110px">'+esc(S.profile.constraints||'')+'</textarea></div>'+
+      '<button class="primary" id="btnSaveProfile" style="width:100%;margin-top:10px">Save profile</button></div>'+
     '<div class="card"><h3>Storage</h3><div class="hint" id="storeInfo">checking…</div>'+
       '<div class="hint" style="margin-top:6px">'+esc(S.sessions.length)+' sessions · program v'+esc(S.program.version)+' · '+esc(S.programHistory.length)+' archived version(s)</div></div>'+
     '<div class="card"><h3>Danger</h3><button class="ghost" id="btnReset" style="width:100%">Reset everything</button>'+
@@ -1175,7 +1337,7 @@ function calDetail(d,plan,D){
     if(plan.kind==='gym'){
       const byEx={}; for(const st of s.sets){ (byEx[st.exercise_id]=byEx[st.exercise_id]||[]).push(st); }
       return Object.keys(byEx).map(id=>'<div class="hint"><b>'+esc(ex(id)?ex(id).name:id)+'</b> '+
-        byEx[id].map(x=>x.actual.load_kg+'×'+x.actual.reps+(x.actual.rpe?'@'+x.actual.rpe:'')).join(' · ')+'</div>').join('')+
+        esc(byEx[id].map(setText).join(' · '))+'</div>').join('')+
         '<div class="hint" style="margin-top:6px">Readiness '+fmt(readinessScore(s.readiness))+'/5'+(s.note?' · “'+esc(s.note)+'”':'')+tag+'</div>';
     }
     return '<div class="hint">'+s.duration_min+' min'+(s.distance_km?', '+s.distance_km+' km':'')+(s.load_kg?', '+s.load_kg+' kg':'')+
@@ -1202,11 +1364,12 @@ function calDetail(d,plan,D){
 function bdBanner(iso){ return '<div class="callout warn" style="margin-bottom:8px">⚠ Back-dated log for <b>'+dlabel(iso)+'</b> (today is '+dlabel(today())+'). No suggested loads — enter what you actually did.</div>'; }
 function vBackdateGym(day,iso){
   return bdBanner(iso)+day.slots.map(sl=>{
-    const e=ex(sl.exercise_id);
+    const e=ex(slotExercise(sl,iso)); if(!e) return '';
+    const fields=logFields(e);
     const rows=Array.from({length:sl.sets},(_,i)=>
-      '<div class="setrow"><div class="idx">'+(i+1)+'</div>'+
-      '<div><small>'+(sl.isometric?'sec':sl.carry?'m':'kg')+'</small><input type="number" inputmode="decimal" data-bd="'+sl.id+'" data-i="'+i+'" data-k="load"></div>'+
-      '<div><small>'+(sl.isometric?'—':'reps')+'</small><input type="number" inputmode="numeric" data-bd="'+sl.id+'" data-i="'+i+'" data-k="reps"'+(sl.isometric?' disabled':'')+'></div>'+
+      '<div class="setrow'+(fields.length===1?' cols2':'')+'"><div class="idx">'+(i+1)+'</div>'+
+      fields.map(f=>'<div><small>'+f.label+'</small><input type="number" inputmode="decimal" step="'+f.step+
+        '" data-bd="'+sl.id+'" data-i="'+i+'" data-k="'+f.k+'"></div>').join('')+
       '<div><small>RPE</small><input type="number" inputmode="decimal" step="0.5" data-bd="'+sl.id+'" data-i="'+i+'" data-k="rpe"></div></div>').join('');
     return '<div style="margin-top:8px"><div class="exname" style="font-size:13px">'+esc(e.name)+' <span class="tag">'+sl.sets+'×'+(sl.reps[0]===sl.reps[1]?sl.reps[0]:sl.reps.join('-'))+(sl.rpe?' @'+sl.rpe:'')+'</span></div>'+rows+'</div>';
   }).join('')+
@@ -1232,11 +1395,12 @@ async function saveBackdate(){
       const {bd,i,k}=inp.dataset; ((by[bd]=by[bd]||{})[i]=by[bd][i]||{})[k]=inp.value; });
     const sets=[];
     for(const sl of day.slots){ const g=by[sl.id]||{};
+      const exId=slotExercise(sl,iso), exr=ex(exId), t=exr?exr.log:'weight_reps';
       Object.keys(g).forEach(i=>{ const a=g[i];
-        if((a.load==null||a.load==='')&&(a.reps==null||a.reps==='')) return;
-        sets.push({ id:uid('set'), exercise_id:sl.exercise_id, set_index:+i+1,
+        if(!hasData(t,a)) return;
+        sets.push({ id:uid('set'), exercise_id:exId, set_index:+i+1, log:t,
           prescribed:{ load_kg:null, reps:sl.reps[1], rpe:sl.rpe!=null?sl.rpe:null },
-          actual:{ load_kg:a.load?+a.load:0, reps:a.reps?+a.reps:0, rpe:a.rpe?+a.rpe:null } }); });
+          actual: buildActual(t,a) }); });
     }
     if(!sets.length) return toast('Enter at least one set');
     S.sessions.push({ id:uid('s'), kind:'gym', date:dateISO, day_id:day.id, day_label:day.label,
@@ -1304,6 +1468,12 @@ function wire(D){
   const b2=document.getElementById('btnLogRun');   if(b2) b2.onclick=logRun;
   const b3=document.getElementById('btnLogCheck'); if(b3) b3.onclick=logCheck;
   const b4=document.getElementById('btnAnyDay');   if(b4) b4.onclick=()=>{ App.tab='check'; render(); };
+  const bm=document.getElementById('btnLogMob');
+  if(bm) bm.onclick=async()=>{
+    S.sessions.push({id:uid('s'), kind:'mobility', date:nowISO(), minutes:10,
+      drills:MOB_FLOW.slice(), created_at:nowISO()});
+    await save(); render(); toast('Mobility logged ✓');
+  };
 
   const bb=document.getElementById('btnBrief');
   if(bb) bb.onclick=()=>{ const n=document.getElementById('briefNote');
@@ -1318,6 +1488,10 @@ function wire(D){
     try{ const n=importPlan(t.value); await save(); toast('Program v'+n.version+' applied ✓'); render(); }
     catch(e){ toast(e.message); }
   };
+
+  const sp=document.getElementById('btnSaveProfile');
+  if(sp) sp.onclick=async()=>{ S.profile.note=val('pfNote').trim(); S.profile.constraints=val('pfCon').trim();
+    await save(); render(); toast('Profile saved ✓'); };
 
   const bk=document.getElementById('btnBackup');  if(bk) bk.onclick=doBackup;
   const rs=document.getElementById('btnRestore'); if(rs) rs.onclick=()=>document.getElementById('fileIn').click();
@@ -1345,7 +1519,7 @@ function wire(D){
 function applyRpeCap(slotId, setIdx){
   if(!App.draft || !App.draft.rows) return;
   const row=App.draft.rows.find(r=>r.slot.id===slotId);
-  if(!row || !row.slot.rpe || row.slot.isometric || row.slot.carry) return;
+  if(!row || !row.slot.rpe || row.ex.log!=='weight_reps') return;   // only load-based sets carry a load to reduce
   const arr=App.draft.actuals[slotId]; if(!arr) return;
   const a=arr[setIdx];
   if(a.rpe===''||a.rpe==null||isNaN(a.rpe)) return;
@@ -1366,16 +1540,32 @@ function applyRpeCap(slotId, setIdx){
 }
 
 /* ================= LOGGERS (append-only) ================= */
+/* Build a set's `actual` for the exercise's log type. Seconds are NEVER stored
+   as load_kg, and a carry's distance is NEVER stored as reps (spec §4). */
+function buildActual(logType, a){
+  const n=v=>(v===''||v==null||isNaN(v))?null:+v;
+  const rpe=n(a.rpe);
+  if(logType==='time')            return {seconds:n(a.secs), rpe};
+  if(logType==='reps')            return {reps:n(a.reps), rpe};
+  if(logType==='weight_distance') return {load_kg:n(a.load), distance_m:n(a.dist), rpe};
+  return {load_kg:n(a.load), reps:n(a.reps), rpe};
+}
+const hasData=(logType,a)=>{
+  if(logType==='time') return a.secs!==''&&a.secs!=null;
+  if(logType==='reps') return a.reps!==''&&a.reps!=null;
+  if(logType==='weight_distance') return (a.load!==''&&a.load!=null)||(a.dist!==''&&a.dist!=null);
+  return (a.load!==''&&a.load!=null)||(a.reps!==''&&a.reps!=null);
+};
 async function logGym(){
   const day=S.program.days.find(d=>d.id===App.draft.dayId);
   const sets=[];
   for(const r of App.draft.rows){
-    const arr=App.draft.actuals[r.slot.id]||[];
+    const arr=App.draft.actuals[r.slot.id]||[], t=r.ex.log;
     arr.forEach((a,i)=>{
-      if(a.load===''&&a.reps==='') return;
-      sets.push({ id:uid('set'), exercise_id:r.exId, set_index:i+1,
+      if(!hasData(t,a)) return;
+      sets.push({ id:uid('set'), exercise_id:r.exId, set_index:i+1, log:t,
         prescribed:{ load_kg:r.suggested!=null?r.suggested:null, reps:r.targetReps, rpe:r.targetRpe!=null?r.targetRpe:null },
-        actual:{ load_kg:a.load===''?0:+a.load, reps:a.reps===''?0:+a.reps, rpe:a.rpe===''?null:+a.rpe } });
+        actual: buildActual(t,a) });
     });
   }
   if(!sets.length) return toast('Log at least one set');
