@@ -135,9 +135,15 @@
 
 /* ---------- IndexedDB key-value store ---------- */
 const DB='coachdb', ST='kv';
-function idb(){ return new Promise((res,rej)=>{ const r=indexedDB.open(DB,1);
+function idb(){ return new Promise((res,rej)=>{
+  let done=false; const finish=fn=>(...a)=>{ if(done) return; done=true; clearTimeout(to); fn(...a); };
+  const ok=finish(res), fail=finish(rej);
+  const to=setTimeout(()=>fail(new Error('Storage timed out — close any other open tabs of this app and try again.')),5000);
+  let r; try{ r=indexedDB.open(DB,1); }catch(e){ return fail(e); }
   r.onupgradeneeded=()=>r.result.createObjectStore(ST);
-  r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error); }); }
+  r.onsuccess=()=>ok(r.result);
+  r.onerror=()=>fail(r.error||new Error('Storage unavailable'));
+  r.onblocked=()=>fail(new Error('Storage is busy — close any other open tabs of this app and try again.')); }); }
 async function kvGet(k){ const d=await idb(); return new Promise((res,rej)=>{
   const q=d.transaction(ST,'readonly').objectStore(ST).get(k);
   q.onsuccess=()=>res(q.result); q.onerror=()=>rej(q.error); }); }
@@ -250,7 +256,7 @@ const loadFor=(e1,reps,rpe,step)=> round(e1*(pct(reps+clamp(10-rpe,0,10))/100), 
 let S={};
 /* The exercise LIBRARY is reference data — it always comes from code, never from
    storage (that's the fix for the stale-library bug). Only user data persists. */
-const LIB_VERSION=2;
+const LIB_VERSION=3;
 const PERSIST_KEYS=['profile','goals','program','programHistory','sessions','meta'];
 const ALL_KEYS=[...PERSIST_KEYS,'exercises'];
 const ex=id=>S.exercises.find(e=>e.id===id);
@@ -321,12 +327,15 @@ function seedState(){
       E('sa_pulldown','Straight-arm pulldown','v_pull','cable',2.5,[],['lat_pulldown'],['Lats without elbow load']),
       /* ---- 4g CORE (anti-movement) --------------------------------------- */
       E('dead_bug','Dead bug','core','bodyweight',0,['anti_extension'],['bird_dog','plank'],['Ribs DOWN — your key L5-S1 protector','Exhale hard at the end of each rep'],'reps'),
-      E('bird_dog','Bird dog','core','bodyweight',0,['anti_rotation','back_sparing'],['dead_bug','plank'],['Hips level, low back still'],'reps'),
       E('plank','Front plank + breathing','core','bodyweight',0,['anti_extension','tactical_stance'],['dead_bug','side_plank'],['Tailbone tucked','Breathe without losing the brace'],'time'),
-      E('side_plank','Side plank','core','bodyweight',0,['anti_rotation'],['plank','suitcase_hold'],['Anti-lateral-flexion — stack the hips'],'time'),
-      E('pallof','Pallof press','core','cable',2.5,['anti_rotation','tactical_stance'],['hk_antirot','side_plank'],['Anti-rotation = a stable shooting platform','Ribs down']),
-      E('hk_antirot','Half-kneeling anti-rotation hold','core','cable',2.5,['anti_rotation','tactical_stance'],['pallof','plank'],['Literal shooting position','Squeeze the down-leg glute'],'time'),
-      E('suitcase_hold','Suitcase hold (static)','core','dumbbell',2.5,['anti_rotation','carry'],['side_plank','suitcase_carry'],['Trunk under load — nothing moves','Do not lean'],'time'),
+      /* separate pattern from the anti-extension pair above — dead_bug's slot is
+         `role:'fixed'` so it never rotates; anti-rotation needs its own pool so
+         it gets its own dedicated slot instead of being locked out entirely. */
+      E('bird_dog','Bird dog','core_rot','bodyweight',0,['anti_rotation','back_sparing'],['dead_bug','plank'],['Hips level, low back still'],'reps'),
+      E('side_plank','Side plank','core_rot','bodyweight',0,['anti_rotation'],['plank','suitcase_hold'],['Anti-lateral-flexion — stack the hips'],'time'),
+      E('pallof','Pallof press','core_rot','cable',2.5,['anti_rotation','tactical_stance'],['hk_antirot','side_plank'],['Anti-rotation = a stable shooting platform','Ribs down']),
+      E('hk_antirot','Half-kneeling anti-rotation hold','core_rot','cable',2.5,['anti_rotation','tactical_stance'],['pallof','plank'],['Literal shooting position','Squeeze the down-leg glute'],'time'),
+      E('suitcase_hold','Suitcase hold (static)','core_rot','dumbbell',2.5,['anti_rotation','carry'],['side_plank','suitcase_carry'],['Trunk under load — nothing moves','Do not lean'],'time'),
       /* ---- 4h CARRIES ----------------------------------------------------- */
       E('suitcase_carry','Suitcase carry','carry','dumbbell',2.5,['carry','anti_rotation','tactical_patrol'],['farmer_carry','front_rack_carry'],['Do NOT lean — anti-lateral-flexion','Loaded carriage + trunk in one'],'weight_distance'),
       E('farmer_carry','Farmer carry','carry','dumbbell',2.5,['carry','tactical_patrol','benchmark'],['suitcase_carry','front_rack_carry'],['Stay stacked — don’t lean back','Grip + trunk + work capacity'],'weight_distance'),
@@ -353,7 +362,8 @@ function seedState(){
           {id:'a3', exercise_id:'lat_pulldown',    sets:3, reps:[8,10],  rpe:7,    rest:90,  role:'main'},
           {id:'a4', exercise_id:'rfe_split_squat', sets:2, reps:[8,8],   rpe:6,    rest:90,  role:'accessory'},
           {id:'a5', exercise_id:'dead_bug',        sets:3, reps:[8,8],   rpe:null, rest:45,  role:'fixed'},
-          {id:'a6', exercise_id:'calf_raise',      sets:2, reps:[15,15], rpe:null, rest:45,  role:'accessory'}
+          {id:'a6', exercise_id:'calf_raise',      sets:2, reps:[15,15], rpe:null, rest:45,  role:'accessory'},
+          {id:'a7', exercise_id:'pallof',          sets:2, reps:[8,8],   rpe:null, rest:45,  role:'accessory'}
         ]},
         {id:'run_tue', dow:'tue', kind:'run', modality:'run_walk', label:'Run — run/walk ladder',
           note:'The gated impact session. Every bout stays under your symptom line — volume first, bout length later.'},
@@ -363,7 +373,8 @@ function seedState(){
           {id:'b3', exercise_id:'hk_press',       sets:2, reps:[8,8],   rpe:7,    rest:90,  role:'main'},
           {id:'b4', exercise_id:'leg_extension',  sets:3, reps:[6,8],   rpe:7,    rest:90,  role:'fixed'},
           {id:'b5', exercise_id:'suitcase_carry', sets:3, reps:[20,20], rpe:null, rest:60,  role:'accessory'},
-          {id:'b6', exercise_id:'tgu',            sets:3, reps:[2,2],   rpe:6,    rest:60,  role:'accessory'}
+          {id:'b6', exercise_id:'tgu',            sets:3, reps:[2,2],   rpe:6,    rest:60,  role:'accessory'},
+          {id:'b7', exercise_id:'bird_dog',       sets:2, reps:[8,8],   rpe:null, rest:45,  role:'accessory'}
         ]},
         {id:'run_fri', dow:'fri', kind:'run', modality:'ruck', label:'Ruck / loaded walk',
           note:'Zone 2 and loaded carriage in one session. Low impact. Progress the LOAD slowly.'},
@@ -474,11 +485,60 @@ function derive(){
       detail:'Flagged '+n+'× in two weeks, so I’ve eased your running and swapped '+a+'-heavy lifts to protect it. Clears after 7 days symptom-free.',
       t:a+' flare ×'+n+' in 14d — impact gated, exercises auto-swapped'});
   }
+
+  /* Discipline/goal-stagnation flags — deliberately blunt (infantry-readiness
+     stakes, not just fitness). Tissue/pain flags above stay calm on purpose:
+     a hard tone has no business discouraging backing off a real injury
+     signal. These three read the log for what gym-adherence alone can't show. */
+  const runsSess=sess.filter(s=>s.kind==='run');
+  const lastRun=runsSess.length?runsSess[runsSess.length-1]:null;
+  const runGapDays=lastRun?(now-new Date(lastRun.date))/864e5:null;
+  let runDormancyFired=false;
+  if(runGapDays!=null && runGapDays>=14){
+    runDormancyFired=true;
+    const gd=Math.floor(runGapDays);
+    flags.push({sev:runGapDays>=24?'act':'watch',
+      title:gd+' days since your last run',
+      detail:'Gym keeps happening — running doesn’t. That’s the piece that makes you infantry-ready instead of just gym-strong. Nobody checks your front squat before a patrol.',
+      t:gd+'d since last run — aerobic/impact base not building despite gym adherence'});
+  }
+  for(const tst of TESTS){
+    const last=lastTest(tst.modality);
+    const overdue = last ? daysBetween(now,last.date)>(tst.every+4)
+                         : daysBetween(now,S.meta.program_start)>=tst.every;
+    if(overdue){
+      const gd=last?Math.floor(daysBetween(now,last.date)):null;
+      flags.push({sev:'watch',
+        title:tst.name+(last?' — '+gd+'d since last test':' never tested'),
+        detail: last
+          ? 'You proved you could hit it '+gd+' days ago. Right now you don’t know if you still can — and the only way to find out is the retest you keep not doing.'
+          : 'This is a real standard, not a nice-to-have — and it’s never been run once.',
+        t:tst.name+' overdue ('+(last?gd+'d since last':'never done')+', cadence '+tst.every+'d)'});
+    }
+  }
+  const bwChecks=sess.filter(s=>s.kind==='check'&&s.bodyweight_kg!=null);
+  const g3=goal('g3');
+  if(g3 && bwChecks.length>=2){
+    const latest=bwChecks[bwChecks.length-1];
+    const old=[...bwChecks].reverse().find(c=>(new Date(latest.date)-new Date(c.date))/864e5>=21);
+    if(old){
+      const delta=+(latest.bodyweight_kg-old.bodyweight_kg).toFixed(1);
+      const dir=g3.dir||'down';
+      const stalled = dir==='down' ? delta>-1 : delta<1;
+      if(stalled) flags.push({sev:'watch',
+        title:fmt(latest.bodyweight_kg)+' kg — basically where you were '+Math.round((new Date(latest.date)-new Date(old.date))/864e5)+' days ago',
+        detail:'Nothing physical is stopping this one — no tissue excuse, no gate. Every kilo you’re not losing is a kilo your knees and lungs carry under a rucksack.',
+        t:'Bodyweight stalled: '+(delta>0?'+':'')+delta+' kg over '+Math.round((new Date(latest.date)-new Date(old.date))/864e5)+'d vs target '+fmt(g3.target)+' kg'});
+    }
+  }
+
   /* missed-pattern: scheduled training days in the past 14d (>= install) with no
      matching session. A single miss is noise; a PATTERN is a planning signal —
-     flag it toward re-planning, never toward cramming (tissue-first). */
+     flag it toward re-planning, never toward cramming (tissue-first). Skipped
+     for runs when the dormancy flag above already fired — same underlying
+     problem, no need to say it twice. */
   const adher=adherenceWindow(14);
-  if(adher.runsMissed>=2)
+  if(!runDormancyFired && adher.runsMissed>=2)
     flags.push({sev:'watch',
       title:'Running’s slipped this fortnight',
       detail:adher.runsMissed+' of your last '+adher.runsPlanned+' runs missed. Your engine runs on consistency — if your week’s changed, export a brief and we’ll adjust.',
@@ -583,6 +643,22 @@ function planGym(day, readiness, D, iso){
       if(steps!==0){ const a=steps*(e.increment||2.5); L+=a; mods.push((a>0?'+':'')+fmt(a)+' readiness'); }
       if(progressionEarned(exId, sl)){ L+=(e.increment||2.5); mods.push('+'+fmt(e.increment)+' progression'); }
       suggested=Math.max(e.increment||2.5, round(L, e.increment||2.5));
+    }
+    else if(targetRpe){
+      /* No history on this exact exercise yet — usually because rotation just
+         swapped it in. Borrow the best-known e1RM from a sibling exercise in
+         the same movement pattern rather than leaving the lifter with nothing
+         to start from. Deliberately skips drift/progression (meaningless for
+         borrowed data); readiness still applies since it's a property of
+         today, not of the exercise. */
+      const sib=S.exercises.filter(o=>o.pattern===e.pattern && o.id!==exId)
+        .map(o=>({o, e1:(D.per[o.id]||{}).e1||0})).sort((a,b)=>b.e1-a.e1)[0];
+      if(sib && sib.e1>0){
+        let L=loadFor(sib.e1, targetReps, targetRpe, e.increment||2.5);
+        if(steps!==0){ const a=steps*(e.increment||2.5); L+=a; mods.push((a>0?'+':'')+fmt(a)+' readiness'); }
+        suggested=Math.max(e.increment||2.5, round(L, e.increment||2.5));
+        basis='estimated from '+sib.o.name+' (e1RM '+fmt(sib.e1)+' kg) — different exercise, start here and let RPE correct it';
+      }
     }
     return {slot:sl, ex:e, exId, swapped, targetReps, targetRpe, suggested, basis, mods};
   });
@@ -987,7 +1063,22 @@ function wireSetup(){
   };
 }
 
-function nudgeHTML(){ return checkNudgeHTML()+backupNudgeHTML(); }
+function nudgeHTML(){ return checkNudgeHTML()+eveningRunNudgeHTML()+backupNudgeHTML(); }
+/* Tue's run and Fri's ruck don't fit the morning (school drop-off + office) —
+   evenings do. Nothing in the engine is time-of-day aware, so the only real
+   gap is a same-day prompt: without this, an evening session can be silently
+   skipped with no nudge at all until tomorrow's "yesterday's check" nudge —
+   which is exactly how a 31-day run gap went unnoticed. No day reassignment;
+   Tue/Fri stay put, this just covers the evening window that's actually free. */
+function eveningRunNudgeHTML(){
+  const t=today(), plan=planForDate(t);
+  if(!plan || plan.kind!=='run') return '';
+  if(sessOn(t,'run')) return '';
+  if(new Date().getHours()<16) return '';
+  return '<div class="nudge" style="background:#1c0d0d;border-color:#3b1c1c;color:var(--bad)">'+
+    '<div>⚡ Tonight’s <b>'+esc(plan.label)+'</b> is still open.</div>'+
+    '<button class="sm" id="btnEveningRun" style="background:var(--bad);color:#1c0d0d;border:none">Log it</button></div>';
+}
 function backupNudgeHTML(){
   const age=backupAgeDays();
   if(!S.sessions.length || age<7) return '';
@@ -1007,6 +1098,72 @@ function checkNudgeHTML(){
 }
 
 const GSRC={g1:'from your fastest logged run', g2:'from your Cooper test', g3:'from morning check-ins', g4:'from the run/walk ladder'};
+
+/* Daily-use entry point for the home tab — the morning check-in. Collapses to
+   a one-line confirmation once logged today so it never re-blocks the rest of
+   the page; the form itself is unchanged from what used to live on the Check
+   tab, just relocated (wire()'s data-area/cBw/cNote/btnLogCheck bindings are
+   generic and need no changes for the move). */
+function checkInCardHTML(D){
+  if(!App.check) App.check={symptoms:Object.fromEntries(AREAS.map(a=>[a[0],0]))};
+  const c=App.check;
+  const todayChecks=S.sessions.filter(s=>s.kind==='check'&&s.date.slice(0,10)===today());
+  if(todayChecks.length){
+    const t=todayChecks[todayChecks.length-1];
+    const sy=(t.symptoms||[]).filter(x=>x.severity>0);
+    return '<div class="card"><div class="callout good">✓ Checked in today'+
+      (sy.length?' — '+sy.map(x=>esc(x.area)+' '+x.severity).join(', '):'')+
+      (t.bodyweight_kg?' · '+fmt(t.bodyweight_kg)+' kg':'')+'</div></div>';
+  }
+  return '<div class="card"><h3>Morning check — how does the body feel?</h3>'+
+    '<div class="hint" style="margin-bottom:12px">The most important input you give the engine. Flares <b>gate your impact</b> and <b>swap your exercises</b> automatically.</div>'+
+    '<div class="col">'+AREAS.map(a=>
+      '<div><label class="f">'+a[1]+'</label><div class="sev" data-area="'+a[0]+'">'+
+      [0,1,2,3].map(n=>'<button data-v="'+n+'" class="'+(c.symptoms[a[0]]===n?'on':'')+'">'+['none','mild','mod','high'][n]+'</button>').join('')+
+      '</div></div>').join('')+
+      '<div><label class="f">Bodyweight (kg) — optional</label><input type="number" inputmode="decimal" step="0.1" id="cBw" placeholder="'+(D.bw||goal('g3').baseline||'')+'"></div>'+
+      '<div><label class="f">Note</label><textarea id="cNote" placeholder="Knee after yesterday\'s run? Sleep? Stress?"></textarea></div>'+
+    '</div>'+
+    '<button class="primary" id="btnLogCheck" style="width:100%;margin-top:12px;padding:15px">Log check →</button></div>';
+}
+/* Monday of the ISO week containing `iso` — used only by the weekly checklist. */
+function mondayOf(iso){
+  const off={mon:0,tue:1,wed:2,thu:3,fri:4,sat:5,sun:6}[dowOf(iso)];
+  return addDays(dayKey(iso), -off);
+}
+/* Completion checklist for the current week — replaces raw aerobic minutes
+   (meaningless day to day) with the thing that's actually true or false:
+   did the scheduled session happen. planForDate()/sessOn() already resolve
+   test-day overrides, so this needs no special-casing for those. */
+function weekChecklistHTML(D){
+  const mon=mondayOf(today()), t=today();
+  const items=Array.from({length:7},(_,i)=>{
+    const d=addDays(mon,i), plan=planForDate(d);
+    if(!plan) return {d, plan:null};
+    const done=!!sessOn(d,plan.kind);
+    const state = done?'done' : d>t?'upcoming' : d===t?'today':'missed';
+    return {d, plan, state};
+  });
+  const counts=k=>{ const s=items.filter(i=>i.plan&&i.plan.kind===k);
+    return s.filter(i=>i.state==='done').length+'/'+s.length; };
+  const chip=i=>{
+    const label=dowOf(i.d).slice(0,1).toUpperCase()+dowOf(i.d).slice(1,3);
+    const icon = !i.plan?'·' : i.state==='done'?'✓' : i.state==='missed'?'✗' : i.state==='today'?'●':'○';
+    const cls = !i.plan||i.state==='upcoming' ? 'pill dim' : i.state==='done'?'pill good' : i.state==='missed'?'pill bad' : 'pill';
+    const extra = i.state==='today' && i.plan ? 'border-color:var(--accent);color:var(--accent);' : '';
+    return '<div class="col" style="align-items:center;gap:3px;flex:1">'+
+      '<div class="hint" style="font-size:10px">'+label+'</div>'+
+      '<div class="'+cls+'" style="'+extra+'min-width:24px;justify-content:center">'+icon+'</div>'+
+    '</div>';
+  };
+  return '<div class="card"><h3>This week</h3>'+
+    '<div class="row" style="gap:16px;margin-bottom:10px">'+
+      '<div><b>'+counts('gym')+'</b> <span class="dim">gym</span></div>'+
+      '<div><b>'+counts('run')+'</b> <span class="dim">runs</span></div>'+
+    '</div>'+
+    '<div class="row" style="gap:2px">'+items.map(chip).join('')+'</div>'+
+  '</div>';
+}
 function vGoals(D){
   const bars=S.goals.map(g=>{
     const st=goalStat(g,D), p=progressOf(g,D), cur=st.cur;
@@ -1028,15 +1185,12 @@ function vGoals(D){
       }).join('')+'</div></div>'
     : '<div class="card"><div class="callout good">All clear — nothing needs your attention right now. Keep going.</div></div>';
   return '<div class="col">'+nudgeHTML()+
+    checkInCardHTML(D)+
+    weekChecklistHTML(D)+
+    flags+
     '<div class="card"><h3>Goals — everything serves these</h3><div class="col">'+bars+'</div>'+
     '<div class="divider"></div><div class="hint">Bars fill from your logged training — the jog gate from the ladder, the 5k from your fastest run, bodyweight from check-ins. The two field tests below feed the rest.</div></div>'+
     vTests(D)+
-    flags+
-    '<div class="card"><h3>This week</h3><div class="grid g3">'+
-      '<div class="goal"><div class="hint">Run 7d</div><div class="nm">'+Math.round(D.run7)+'<span class="dim" style="font-size:11px"> min</span></div></div>'+
-      '<div class="goal"><div class="hint">Run 28d</div><div class="nm">'+Math.round(D.run28)+'<span class="dim" style="font-size:11px"> min</span></div></div>'+
-      '<div class="goal"><div class="hint">Jog bout</div><div class="nm">'+fmt(D.ladder.jog)+'<span class="dim" style="font-size:11px"> min</span></div></div>'+
-    '</div><div class="hint" style="margin-top:10px">MON gym · TUE run · WED gym · FRI ruck · SUN run — Thu &amp; Sat rest</div></div>'+
   '</div>';
 }
 
@@ -1187,6 +1341,21 @@ function perHandHint(exr){
   if(exr.equip==='kettlebell') return 'Log one kettlebell’s weight.';
   return '';
 }
+/* Unilateral exercises never say whether the rep count is per side or total —
+   answer it directly instead of leaving it to guesswork on the gym floor. */
+function perSideNoun(exr){
+  if(!exr.tags.includes('unilateral')) return '';
+  return ['squat','hinge','calf'].includes(exr.pattern) ? 'leg' : 'arm';
+}
+/* Short, human labels for why a given exercise is programmed — reused as
+   small badges so the reasoning behind a slot is visible, not just implied. */
+const TAG_LABELS={
+  anti_extension:'Anti-extension core', anti_rotation:'Anti-rotation',
+  tendon_iso:'Tendon loading', back_sparing:'Low spinal load',
+  carry:'Loaded carry', unilateral:'Unilateral',
+  tactical_stance:'Shooting-stance carryover', tactical_patrol:'Patrol-load carryover',
+  tactical_contact:'Ground-to-standing / contact', benchmark:'Benchmark lift'
+};
 function logFields(exr){
   const inc=exr.increment||2.5, kg=kgLabel(exr);
   switch(exr.log){
@@ -1209,20 +1378,24 @@ function gymSlot(r){
   if(!App.draft.actuals[sl.id]) App.draft.actuals[sl.id]=Array.from({length:sl.sets},()=>blankSet(r));
   const arr=App.draft.actuals[sl.id];
   const fields=logFields(r.ex);
-  const head = t==='time' ? sl.reps[1]+'s hold'
+  const side=perSideNoun(r.ex), sideNote=side?' (each '+side+')':'';
+  const head = (t==='time' ? sl.reps[1]+'s hold'
              : t==='weight_distance' ? (r.suggested!=null? r.suggested+' kg × ':'')+sl.reps[1]+' m'
              : t==='reps' ? sl.reps[1]+' reps'
-             : (r.suggested!=null ? r.suggested+' kg' : '—');
+             : (r.suggested!=null ? r.suggested+' kg' : '—')) + sideNote;
   const tag = t==='time' ? sl.sets+'×'+sl.reps[1]+'s'
             : t==='weight_distance' ? sl.sets+'×'+sl.reps[1]+'m'
             : sl.sets+'×'+(sl.reps[0]===sl.reps[1]?sl.reps[0]:sl.reps.join('-'));
+  const purpose=(r.ex.tags||[]).map(x=>TAG_LABELS[x]).filter(Boolean);
   return '<div class="card">'+
     '<div class="row" style="justify-content:space-between;align-items:baseline">'+
       '<div class="exname">'+esc(r.ex.name)+'</div>'+
       '<div class="tag">'+esc(tag)+(sl.rpe?' @'+esc(sl.rpe):'')+'</div></div>'+
+    (purpose.length?'<div class="row" style="gap:4px;flex-wrap:wrap;margin-top:4px">'+
+      purpose.map(p=>'<span class="pill dim">'+esc(p)+'</span>').join('')+'</div>':'')+
     (r.swapped?'<div class="callout warn" style="margin-top:8px">⇄ Swapped from <b>'+esc(ex(r.swapped).name)+'</b> — symptom flare logged. Protecting the tissue.</div>':'')+
     '<div class="callout '+(r.mods.some(m=>m.indexOf('drift')>=0)?'warn':'info')+'" style="margin-top:8px">'+
-      '<b>'+esc(head)+'</b> <span class="dim">· '+esc(r.basis)+'</span>'+
+      '<b>'+esc(head)+'</b> <span class="dim">· '+esc(r.basis)+' · rest ~'+esc(sl.rest)+'s</span>'+
       (r.mods.length?'<div class="mono dim" style="font-size:11px;margin-top:3px">'+esc(r.mods.join(' · '))+'</div>':'')+'</div>'+
     (r.ex.cues.length?'<div class="hint" style="margin-top:6px">'+r.ex.cues.map(c=>'• '+esc(c)).join('<br>')+'</div>':'')+
     (perHandHint(r.ex)?'<div class="hint" style="margin-top:4px;color:var(--accent)">⚖ '+esc(perHandHint(r.ex))+'</div>':'')+
@@ -1258,31 +1431,35 @@ function vRun(day,D){
 }
 
 const AREAS=[['knee','Knee'],['back','Lower back'],['ankle','Ankle'],['shoulder','Shoulder'],['other','Other']];
+/* Check tab is now the history/trend view — the input form moved to the home
+   tab (checkInCardHTML). Flares and bodyweight are the two things worth
+   looking back over; the 7-day trailing average smooths day-to-day noise out
+   of the raw bodyweight readings. */
 function vCheck(D){
-  if(!App.check) App.check={symptoms:Object.fromEntries(AREAS.map(a=>[a[0],0]))};
-  const c=App.check;
-  const done=S.sessions.some(s=>s.kind==='check'&&s.date.slice(0,10)===today());
-  const recent=S.sessions.filter(s=>s.kind==='check').sort((a,b)=>b.date.localeCompare(a.date)).slice(0,7);
+  const checksAsc=S.sessions.filter(s=>s.kind==='check').sort((a,b)=>a.date.localeCompare(b.date));
+  const bwPoints=checksAsc.filter(s=>s.bodyweight_kg!=null).map(s=>({date:s.date, v:s.bodyweight_kg}));
+  const avg7=dateISO=>{
+    const cutoff=new Date(dateISO); cutoff.setUTCDate(cutoff.getUTCDate()-6);
+    const win=bwPoints.filter(p=>new Date(p.date)>=cutoff && new Date(p.date)<=new Date(dateISO));
+    return win.length? win.reduce((a,b)=>a+b.v,0)/win.length : null;
+  };
+  const latest=bwPoints.length?bwPoints[bwPoints.length-1]:null;
+  const latestAvg=latest?avg7(latest.date):null;
+  const recent=[...checksAsc].reverse().slice(0,21);
   return '<div class="col">'+nudgeHTML()+
-    '<div class="card"><h3>Morning check — how does the body feel?</h3>'+
-      '<div class="hint" style="margin-bottom:12px">The most important input you give the engine. Flares <b>gate your impact</b> and <b>swap your exercises</b> automatically.</div>'+
-      (done?'<div class="callout good" style="margin-bottom:12px">✓ Already checked in today.</div>':'')+
-      '<div class="col">'+AREAS.map(a=>
-        '<div><label class="f">'+a[1]+'</label><div class="sev" data-area="'+a[0]+'">'+
-        [0,1,2,3].map(n=>'<button data-v="'+n+'" class="'+(c.symptoms[a[0]]===n?'on':'')+'">'+['none','mild','mod','high'][n]+'</button>').join('')+
-        '</div></div>').join('')+
-        '<div><label class="f">Bodyweight (kg) — optional</label><input type="number" inputmode="decimal" step="0.1" id="cBw" placeholder="'+(D.bw||goal('g3').baseline||'')+'"></div>'+
-        '<div><label class="f">Note</label><textarea id="cNote" placeholder="Knee after yesterday\'s run? Sleep? Stress?"></textarea></div>'+
-      '</div>'+
-      '<button class="primary" id="btnLogCheck" style="width:100%;margin-top:12px;padding:15px">Log check →</button></div>'+
+    (latest?'<div class="card"><h3>Bodyweight — 7-day trailing average</h3>'+
+      '<div class="goal"><div class="val" style="font-size:22px">'+fmt(latestAvg)+' <span class="dim" style="font-size:13px">kg</span></div>'+
+      '<div class="hint" style="margin-top:5px">Latest logged: '+fmt(latest.v)+' kg on '+dlabel(latest.date)+'</div></div></div>'
+    :'')+
     '<div class="card"><h3>Recent checks</h3>'+
       (recent.length? recent.map(s=>{
         const sy=(s.symptoms||[]).filter(x=>x.severity>0);
+        const bwAvg=s.bodyweight_kg!=null?avg7(s.date):null;
         return '<div class="row" style="justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid var(--line)">'+
           '<span class="mono dim">'+esc(String(s.date).slice(5,10))+'</span>'+
           '<span>'+(sy.length? sy.map(x=>'<span class="pill '+(x.severity>=2?'bad':'warn')+'">'+esc(x.area)+' '+esc(x.severity)+'</span>').join(' ') : '<span class="pill good">clean</span>')+'</span>'+
-          '<span class="mono dim">'+(s.bodyweight_kg? esc(s.bodyweight_kg)+'kg':'')+'</span></div>';
-      }).join('') : '<div class="hint">Nothing yet.</div>')+
+          '<span class="mono dim">'+(s.bodyweight_kg!=null? fmt(s.bodyweight_kg)+'kg'+(bwAvg!=null?' · 7d '+fmt(bwAvg):''):'')+'</span></div>';
+      }).join('') : '<div class="hint">Nothing yet — log your first morning check from the Goals tab.</div>')+
     '</div></div>';
 }
 
@@ -1503,7 +1680,8 @@ function wire(D){
   menu.onclick=e=>{ if(e.target===menu){ App.menuOpen=false; renderMenu(); } };
 
   // check-owed nudge
-  const cn=document.getElementById('btnCheckNudge'); if(cn) cn.onclick=()=>{ App.tab='check'; render(); };
+  const cn=document.getElementById('btnCheckNudge'); if(cn) cn.onclick=()=>{ App.tab='goals'; render(); };
+  const er=document.getElementById('btnEveningRun'); if(er) er.onclick=()=>{ App.tab='today'; render(); };
 
   // field tests -> feed goals
   document.querySelectorAll('[data-testedit]').forEach(b=>b.onclick=()=>{ App.testEdit=b.dataset.testedit; render();
@@ -1538,12 +1716,14 @@ function wire(D){
   const b1=document.getElementById('btnLogGym');   if(b1) b1.onclick=logGym;
   const b2=document.getElementById('btnLogRun');   if(b2) b2.onclick=logRun;
   const b3=document.getElementById('btnLogCheck'); if(b3) b3.onclick=logCheck;
-  const b4=document.getElementById('btnAnyDay');   if(b4) b4.onclick=()=>{ App.tab='check'; render(); };
+  const b4=document.getElementById('btnAnyDay');   if(b4) b4.onclick=()=>{ App.tab='goals'; render(); };
   const bm=document.getElementById('btnLogMob');
   if(bm) bm.onclick=async()=>{
     S.sessions.push({id:uid('s'), kind:'mobility', date:nowISO(), minutes:10,
       drills:MOB_FLOW.slice(), created_at:nowISO()});
-    await save(); render(); toast('Mobility logged ✓');
+    try{ await save(); }
+    catch(e){ S.sessions.pop(); return toast('Couldn’t save: '+(e&&e.message||e)); }
+    render(); toast('Mobility logged ✓');
   };
 
   const bb=document.getElementById('btnBrief');
@@ -1629,6 +1809,7 @@ const hasData=(logType,a)=>{
 };
 async function logGym(){
   const day=S.program.days.find(d=>d.id===App.draft.dayId);
+  if(!day) return toast('Could not find this day in your program — reopen the tab and try again.');
   const sets=[];
   for(const r of App.draft.rows){
     const arr=App.draft.actuals[r.slot.id]||[], t=r.ex.log;
@@ -1643,10 +1824,13 @@ async function logGym(){
   S.sessions.push({ id:uid('s'), kind:'gym', date:nowISO(), day_id:day.id, day_label:day.label,
     program_id:S.program.id, program_version:S.program.version, readiness:{...App.readiness}, sets,
     note:val('sessNote'), created_at:nowISO() });
-  await save(); App.draft=null; App.tab='goals'; render(); toast('Session logged ✓');
+  try{ await save(); }
+  catch(e){ S.sessions.pop(); return toast('Couldn’t save: '+(e&&e.message||e)); }
+  App.draft=null; App.tab='goals'; render(); toast('Session logged ✓');
 }
 async function logRun(){
   const day=S.program.days.find(d=>d.id===App.draft.dayId);
+  if(!day) return toast('Could not find this day in your program — reopen the tab and try again.');
   const dur=num('rDur');
   if(!dur) return toast('Enter the duration');
   const dist=num('rDist');
@@ -1656,17 +1840,23 @@ async function logRun(){
     load_kg: day.modality==='ruck' ? num('rLoad') : null,
     note:val('rNote'), created_at:nowISO() };
   if(dist && dur) s.speed_kmh=+((dist/(dur/60)).toFixed(2));
+  const prevRuck=S.meta.ruck.load_kg;
   S.sessions.push(s);
   if(day.modality==='ruck' && s.load_kg) S.meta.ruck.load_kg=s.load_kg;
-  await save(); App.draft=null; App.tab='goals'; render(); toast('Run logged ✓ — check in tomorrow morning');
+  try{ await save(); }
+  catch(e){ S.sessions.pop(); S.meta.ruck.load_kg=prevRuck; return toast('Couldn’t save: '+(e&&e.message||e)); }
+  App.draft=null; App.tab='goals'; render(); toast('Run logged ✓ — check in tomorrow morning');
 }
 async function logCheck(){
   const bw=num('cBw');
+  const g3=goal('g3'), prevG3=g3?g3.current:undefined;
   S.sessions.push({ id:uid('s'), kind:'check', date:nowISO(),
     symptoms:AREAS.map(a=>({area:a[0], severity:App.check.symptoms[a[0]]||0})),
     bodyweight_kg:bw, note:val('cNote'), created_at:nowISO() });
-  if(bw) goal('g3').current=bw;
-  App.check=null; await save(); App.tab='goals'; render(); toast('Check logged ✓');
+  if(bw && g3) g3.current=bw;
+  try{ await save(); }
+  catch(e){ S.sessions.pop(); if(g3) g3.current=prevG3; return toast('Couldn’t save: '+(e&&e.message||e)); }
+  App.check=null; App.tab='goals'; render(); toast('Check logged ✓');
 }
 
 /* ================= MIGRATIONS ================= */
@@ -1702,6 +1892,15 @@ function migrateProgram(){
     for(const sl of d.slots){
       if(sl.exercise_id && !ex(sl.exercise_id) && REMOVED_MAP[sl.exercise_id]) sl.exercise_id=REMOVED_MAP[sl.exercise_id];
       if(!sl.role) sl.role='accessory';
+    }
+    // v3: anti-rotation got its own pattern (`core_rot`) so it can rotate
+    // independently of the anti-extension slot, which stays `fixed`. A
+    // user-adapted plan predates this and never gets new slots from the
+    // template branch above, so backfill one directly — idempotent, since it
+    // only fires when the day has no core_rot slot yet.
+    if(d.kind==='gym' && Array.isArray(d.slots) &&
+       !d.slots.some(sl=>{ const e=ex(sl.exercise_id); return e&&e.pattern==='core_rot'; })){
+      d.slots.push({id:d.id+'_antirot', exercise_id:'pallof', sets:2, reps:[8,8], rpe:null, rest:45, role:'accessory'});
     }
   }
 }
