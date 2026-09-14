@@ -265,6 +265,9 @@ const fmt=(n,d=1)=>(n==null||isNaN(n))?'—':(+n).toFixed(d).replace(/\.0$/,'');
 const daysBetween=(a,b)=>Math.abs(new Date(a)-new Date(b))/864e5;
 const dshort=iso=>new Date(iso).toLocaleDateString(undefined,{month:'short',day:'numeric'});
 const DOW=['sun','mon','tue','wed','thu','fri','sat'];
+/* Monday-first order, used only for sorting/describing a training WEEK (§6.2) —
+   DOW above stays Sunday-first because it mirrors Date.getUTCDay() and must. */
+const WEEK_ORDER=['mon','tue','wed','thu','fri','sat','sun'];
 /* date-string arithmetic on YYYY-MM-DD (UTC-anchored, like the rest of the app) */
 const dayKey=iso=>String(iso).slice(0,10);
 function addDays(iso,n){ const d=new Date(dayKey(iso)+'T00:00:00Z'); d.setUTCDate(d.getUTCDate()+n); return d.toISOString().slice(0,10); }
@@ -282,18 +285,36 @@ const BENCHMARKS=[
   {id:'farmer_carry', reps:30}    // capacity: load x distance, not e1RM
 ];
 
-/* Programmed field tests, auto every 4 weeks (deload week of each block):
-   Cooper replaces the Tue run, 5k time-trial replaces the Sun run.
-   Every 8 weeks a strength test also replaces Gym B on the Wed. */
+/* Programmed field tests, auto every 4 weeks (deload week of each block).
+   Placement is DERIVED from the live program, not a hardcoded weekday, so it
+   survives a restructure (§6.2): Cooper takes the earliest true running day
+   in the week (kind:'run', modality != 'ruck'), 5k the latest one. A program
+   with only one true running day alternates Cooper/5k across successive test
+   cycles on that same day rather than losing the other test. A strength test
+   takes the latest gym day every 8 weeks (matches the historical Wed slot
+   when there were two gym days; falls on the only gym day when there's one). */
 function testForDate(iso){
   const start=dayKey((S.meta&&S.meta.program_start)||(S.meta&&S.meta.created_at)||today());
   if(dayKey(iso)<start) return null;
   const weekIdx=Math.floor(daysBetween(start,iso)/7);
   if(weekIdx%4!==3) return null;                    // 4th week of each 4-week block
   const dow=dowOf(iso);
-  if(dow==='tue') return {id:'test_cooper', modality:'test_cooper', name:'Cooper test'};
-  if(dow==='sun') return {id:'test_5k',     modality:'test_5k',     name:'5k time-trial'};
-  if(dow==='wed' && weekIdx%8===7) return {id:'strength_test', name:'Strength test', strength:true};
+  const byWeek=(a,b)=>WEEK_ORDER.indexOf(a.dow)-WEEK_ORDER.indexOf(b.dow);
+  const runDays=S.program.days.filter(d=>d.kind==='run' && d.modality!=='ruck').sort(byWeek);
+  const gymDays=S.program.days.filter(d=>d.kind==='gym').sort(byWeek);
+  if(runDays.length){
+    const cooperDay=runDays[0], fiveKDay=runDays[runDays.length-1];
+    if(cooperDay.dow===fiveKDay.dow){
+      if(dow===cooperDay.dow) return (Math.floor(weekIdx/4)%2===0)
+        ? {id:'test_cooper', modality:'test_cooper', name:'Cooper test'}
+        : {id:'test_5k', modality:'test_5k', name:'5k time-trial'};
+    } else {
+      if(dow===cooperDay.dow) return {id:'test_cooper', modality:'test_cooper', name:'Cooper test'};
+      if(dow===fiveKDay.dow)  return {id:'test_5k', modality:'test_5k', name:'5k time-trial'};
+    }
+  }
+  if(gymDays.length && dow===gymDays[gymDays.length-1].dow && weekIdx%8===7)
+    return {id:'strength_test', name:'Strength test', strength:true};
   return null;
 }
 function nextTestDate(testId){
@@ -790,6 +811,19 @@ function planRun(day, D){
     detail: gated? 'Flare logged — keep it to walking or the crosstrainer today.' : 'Nasal-breathing pace, RPE ≤4. Walk/jog mix.'};
 }
 
+/* Human-readable weekly shape, derived from program.days — never hardcoded,
+   so it stays true after a restructure (add/remove/move a day, §6.2). */
+const MOD_SHORT={run_walk:'run', zone2:'run', ruck:'ruck'};
+const capDow=w=>w[0].toUpperCase()+w.slice(1,3);
+function weekLine(P){
+  const on=WEEK_ORDER.filter(w=>P.days.some(d=>d.dow===w));
+  if(!on.length) return 'no sessions scheduled';
+  const off=WEEK_ORDER.filter(w=>!on.includes(w));
+  const sched=on.map(w=>{ const d=P.days.find(x=>x.dow===w);
+    return capDow(w)+' '+(d.kind==='gym'?'gym':(MOD_SHORT[d.modality]||'run')); }).join(' · ');
+  return sched+(off.length?' ('+off.map(capDow).join('/')+' rest + optional mobility)':'');
+}
+
 /* ================= BRIEF EXPORT (§6) ================= */
 function buildBrief(userNote){
   const D=derive(), P=S.program, L=[];
@@ -799,7 +833,7 @@ function buildBrief(userNote){
   L.push('## Athlete');
   if(S.profile.note) L.push(S.profile.note);
   if(S.profile.constraints) L.push('**Constraints (must program around these):** '+S.profile.constraints);
-  L.push('Week: Mon gym · Tue run · Wed gym · Fri ruck · Sun run (Thu/Sat rest + optional mobility). Gym is strength only, hard 45-min cap.');
+  L.push('Week: '+weekLine(P)+'. Gym is strength only, hard 45-min cap.');
   L.push('_Dumbbell/kettlebell and carry loads are logged per hand (one implement), not the total._');
   L.push('**Rotation:** accessory slots rotate weekly, main slots each 4-week block (same movement pattern). **Benchmark battery** — trap-bar DL, front squat, chest press, chest-supported row, lat pulldown, farmer carry — never rotates and is re-tested every 8 weeks; that is the long-term progression record. Vertical push is trained but deliberately never max-tested (arch risk).');
   L.push('');
@@ -873,13 +907,19 @@ function buildBrief(userNote){
   L.push('1. Tell me in plain English what the data says and what you would change — tie every change to a GOAL.');
   L.push('2. Then output the new plan as a SINGLE json code block matching this shape. Include only what you are changing. Use exercise ids from the current program.');
   L.push('');
+  L.push('**Days** (not just slots) can be restructured too. Match an existing day by its `id` to edit it — `dow`, `kind` ("gym" or "run"), `label`, `note`, `modality` (gym days ignore this; run days need one of '+MODALITIES.join('/')+'), and `slots` (gym-kind only — only a gym day can hold exercise slots, run/ruck days stay pure cardio). Give a NEW `id` with `dow`+`kind` to add a day. Put `remove:true` on a day (just its `id`) to delete one. Same `remove:true` pattern works on a slot inside `slots`. Each weekday holds at most one day — a `dow` already in use on another day is rejected.');
+  L.push('');
   L.push('```json');
   L.push(JSON.stringify({
     rationale:'why this version exists — tied to my goals',
     phase:P.phase, block_week:P.block_week+1,
     ladder:{jog:D.ladder.jog, walk:D.ladder.walk, rounds:D.ladder.rounds},
     ruck:S.meta.ruck,
-    days:[{id:'gym_a', slots:[{id:'a1', exercise_id:'trap_bar_dl', sets:3, reps:[5,5], rpe:7, rest:150}]}]
+    days:[
+      {id:'gym_a', slots:[{id:'a1', exercise_id:'trap_bar_dl', sets:3, reps:[5,5], rpe:7, rest:150}]},
+      {id:'gym_b', remove:true},
+      {id:'run_thu', dow:'thu', kind:'run', modality:'zone2', label:'Easy Thursday run'}
+    ]
   },null,2));
   L.push('```');
   return L.join('\n');
@@ -907,6 +947,53 @@ function sanitizeSlot(ps, existing){
   if(ps.carry!==undefined)     out.carry=!!ps.carry;
   return out;
 }
+const KINDS=['gym','run'];
+/* Same discipline as sanitizeSlot: copy only known fields, each bounded, never
+   Object.assign untrusted input. Handles both editing an existing day and
+   building a brand-new one (§6.2 — programs can now add/remove/move days, not
+   just edit slots inside fixed ones). A day is gym-kind XOR run-kind: gym days
+   carry `slots` and no `modality`, run/ruck days carry `modality` and no
+   `slots` — the UI only knows how to render those two shapes (vGym/vRun), so
+   switching a day's kind resets the fields that don't belong to the new kind. */
+function sanitizeDay(pd, existing){
+  const id=sStr(pd.id,64);
+  if(!id) throw new Error('A day is missing its id.');
+  const out = existing ? JSON.parse(JSON.stringify(existing)) : {id};
+  if(pd.dow!==undefined){
+    if(!DOW.includes(pd.dow)) throw new Error('Day "'+id+'": dow must be one of '+DOW.join(', ')+'.');
+    out.dow=pd.dow;
+  }
+  if(pd.kind!==undefined){
+    if(!KINDS.includes(pd.kind)) throw new Error('Day "'+id+'": kind must be "gym" or "run".');
+    if(pd.kind!==out.kind){
+      if(pd.kind==='gym'){ out.slots=Array.isArray(out.slots)?out.slots:[]; delete out.modality; }
+      else { delete out.slots; }
+    }
+    out.kind=pd.kind;
+  }
+  if(!out.kind) throw new Error('Day "'+id+'" needs a kind ("gym" or "run").');
+  if(!out.dow)  throw new Error('Day "'+id+'" needs a dow.');
+  if(pd.label!==undefined) out.label=sStr(pd.label,80)||out.label;
+  if(pd.note!==undefined)  out.note=sStr(pd.note,500);
+  if(out.kind==='run' && pd.modality!==undefined){
+    if(!MODALITIES.includes(pd.modality)) throw new Error('Day "'+id+'": modality must be one of '+MODALITIES.join(', ')+'.');
+    out.modality=pd.modality;
+  }
+  if(out.kind==='run' && !out.modality) throw new Error('Day "'+id+'" is a run day and needs a modality ('+MODALITIES.join('/')+').');
+  if(out.kind==='gym' && !Array.isArray(out.slots)) out.slots=[];
+  if(!out.label) out.label = out.kind==='gym'?'Gym':'Run';
+  if(Array.isArray(pd.slots)){
+    if(out.kind!=='gym') throw new Error('Day "'+id+'": only a gym-kind day can hold exercise slots — run/ruck days stay pure cardio.');
+    for(const ps of pd.slots.slice(0,12)){
+      if(!isObj(ps)) continue;
+      if(ps.remove){ out.slots=out.slots.filter(x=>x.id!==ps.id); continue; }
+      const i=out.slots.findIndex(x=>x.id===ps.id);
+      if(i>=0) out.slots[i]=sanitizeSlot(ps,out.slots[i]);
+      else if(out.slots.length<12) out.slots.push(sanitizeSlot(ps,null));
+    }
+  }
+  return out;
+}
 function importPlan(text){
   let raw=(text||'').trim();
   if(raw.length>500000) throw new Error('That input is too large to be a plan.');
@@ -925,23 +1012,28 @@ function importPlan(text){
   if(p.phase!==undefined)      next.phase=sInt(p.phase,1,10,next.phase);
   if(p.block_week!==undefined) next.block_week=sInt(p.block_week,1,52,next.block_week);
 
-  if(Array.isArray(p.days)) for(const pd of p.days.slice(0,20)){
+  if(Array.isArray(p.days)) for(const pd of p.days.slice(0,10)){
     if(!isObj(pd)) continue;
-    const d=next.days.find(x=>x.id===pd.id);
-    if(!d) continue;
-    if(pd.label!==undefined)    d.label=sStr(pd.label,80) || d.label;
-    if(pd.note!==undefined)     d.note=sStr(pd.note,500);
-    if(pd.modality!==undefined && MODALITIES.includes(pd.modality)) d.modality=pd.modality;
-    if(Array.isArray(pd.slots)){
-      if(!Array.isArray(d.slots)) continue;              // never add lifts to a run day
-      for(const ps of pd.slots.slice(0,12)){
-        if(!isObj(ps)) continue;
-        const i=d.slots.findIndex(x=>x.id===ps.id);
-        if(i>=0) d.slots[i]=sanitizeSlot(ps,d.slots[i]);
-        else if(d.slots.length<12) d.slots.push(sanitizeSlot(ps,null));
-      }
+    if(pd.remove){
+      if(pd.id) next.days=next.days.filter(x=>x.id!==pd.id);
+      continue;
+    }
+    const idx=next.days.findIndex(x=>x.id===pd.id);
+    const sanitized=sanitizeDay(pd, idx>=0?next.days[idx]:null);
+    if(idx>=0) next.days[idx]=sanitized;
+    else {
+      if(next.days.length>=7) throw new Error('A week only has 7 days — remove one before adding another.');
+      next.days.push(sanitized);
     }
   }
+  /* Validated once, after every add/remove/move in this import is applied —
+     not per-edit — so a straight swap of two days' weekdays in one import
+     doesn't trip over its own intermediate state. */
+  { const seenDow={};
+    for(const d of next.days){
+      if(seenDow[d.dow]) throw new Error('Two days land on '+d.dow+' ("'+seenDow[d.dow]+'" and "'+d.id+'") — each weekday can only host one session.');
+      seenDow[d.dow]=d.id;
+    } }
   if(isObj(p.ladder)) S.meta.ladder={
     jog:    sNum(p.ladder.jog,    1, 60, S.meta.ladder.jog),
     walk:   sNum(p.ladder.walk,   0, 30, S.meta.ladder.walk),
