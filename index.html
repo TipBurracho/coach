@@ -383,7 +383,43 @@ const PERSIST_KEYS=['profile','goals','program','programHistory','sessions','met
 const ALL_KEYS=[...PERSIST_KEYS,'exercises'];
 const ex=id=>S.exercises.find(e=>e.id===id);
 const goal=id=>S.goals.find(g=>g.id===id);
-async function save(){ for(const k of PERSIST_KEYS) await kvSet(k,S[k]); }
+/* Two open tabs/instances (installed PWA icon + a leftover browser tab is the
+   common real case) each hold their own in-memory S. Without this, whichever
+   tab calls save() LAST wins and blindly overwrites every key with its own
+   copy — a stale tab silently erases sessions/backups a fresher tab just
+   wrote, with no error and no visible symptom until the next reload. Fixed
+   two ways: (1) before writing, merge sessions/programHistory with whatever
+   is currently in IndexedDB (union by id — never drop an entry this tab
+   doesn't know about) and never regress meta.last_backup backwards in time;
+   (2) broadcast every save so other open tabs refresh instead of staying
+   stale in the first place. */
+let bc=null; try{ bc=new BroadcastChannel('coachdb-sync'); }catch(_){}
+async function save(){
+  try{
+    const dbSessions=await kvGet('sessions');
+    if(Array.isArray(dbSessions)){
+      const byId=new Map(dbSessions.map(s=>[s.id,s]));
+      for(const s of S.sessions) byId.set(s.id,s);
+      S.sessions=[...byId.values()].sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+    }
+    const dbHist=await kvGet('programHistory');
+    if(Array.isArray(dbHist)){
+      const key=p=>p.id+'@'+p.version;
+      const byV=new Map(dbHist.map(p=>[key(p),p]));
+      for(const p of S.programHistory) byV.set(key(p),p);
+      S.programHistory=[...byV.values()];
+    }
+    const dbMeta=await kvGet('meta');
+    if(dbMeta && dbMeta.last_backup && (!S.meta.last_backup || dbMeta.last_backup>S.meta.last_backup)){
+      S.meta.last_backup=dbMeta.last_backup;
+    }
+  }catch(_){ /* best-effort merge; fall through and save this tab's data regardless */ }
+  for(const k of PERSIST_KEYS) await kvSet(k,S[k]);
+  if(bc) try{ bc.postMessage({at:Date.now()}); }catch(_){}
+}
+if(bc) bc.onmessage=async()=>{
+  try{ for(const k of PERSIST_KEYS) S[k]=await kvGet(k); render(); }catch(_){}
+};
 
 /* ================= SEED — generic, no personal data ================= */
 function seedState(){
